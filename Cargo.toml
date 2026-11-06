@@ -1,0 +1,93 @@
+[package]
+name = "v-notch"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Cross-platform desktop status and media companion, a Rust port of V-Notch"
+repository = "https://github.com/pichlervalentin4-lab/V-Notch"
+default-run = "v-notch"
+
+[features]
+default = ["audio", "tls"]
+# Playback and capture through cpal. Needs ALSA headers on Linux.
+audio = ["dep:rodio", "dep:cpal"]
+# HTTPS through the OS TLS stack (SChannel, Security.framework, OpenSSL).
+tls = ["ureq/native-tls"]
+
+[dependencies]
+eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = { version = "3", default-features = false, features = ["gzip", "json"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+sysinfo = "0.40"
+arboard = { version = "3.7", default-features = false, features = ["image-data", "wayland-data-control"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
+starship-battery = "0.12"
+directories = "6"
+open = "5"
+global-hotkey = "0.9"
+raw-window-handle = "0.6"
+rodio = { version = "0.23", default-features = false, features = ["playback"], optional = true }
+cpal = { version = "0.18", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+tray-icon = { version = "0.26", default-features = false }
+windows-core = "0.62"
+drag = "2.1"
+windows = { version = "0.62", features = [
+    "Foundation",
+    "Foundation_Collections",
+    "Media_Control",
+    "Storage_Streams",
+    "Devices_Radios",
+    "Devices_Bluetooth",
+    "Devices_Enumeration",
+    "Win32_Foundation",
+    "Win32_Devices_FunctionDiscovery",
+    "Win32_Graphics_Gdi",
+    "Win32_Media_Audio",
+    "Win32_Media_Audio_Endpoints",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
+    "Win32_Security",
+    "Win32_Security_Cryptography",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Power",
+    "Win32_System_Registry",
+    "Win32_System_Shutdown",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+tray-icon = { version = "0.26", default-features = false }
+drag = "2.1"
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSApplication", "NSResponder", "NSView", "NSWindow", "NSRunningApplication"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "5"
+ksni = { version = "0.3", features = ["blocking"] }
+x11rb = "0.13"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+strip = true
+panic = "unwind"
+
+[profile.dev.package."*"]
+opt-level = 2
