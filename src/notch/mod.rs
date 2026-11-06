@@ -686,7 +686,7 @@ impl Notch {
     /// Dragging files over the closed notch opens the shelf; dropping stages them.
     fn handle_file_hover(&mut self, ctx: &egui::Context) {
         let (hovering, dropped) = ctx.input(|i| {
-            let dropped: Vec<_> = i.raw.dropped_files.iter().filter_map(|f| f.path().map(|p| p.to_path_buf())).collect();
+            let dropped: Vec<_> = i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect();
             (!i.raw.hovered_files.is_empty(), dropped)
         });
         if hovering && (!self.expanded || self.view != View::Shelf) {
