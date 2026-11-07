@@ -81,9 +81,25 @@ pub fn prepare_floating_window_by_title(title: &str) -> bool {
     unsafe {
         let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
         SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (style | WS_EX_TOOLWINDOW.0 as isize) & !(WS_EX_APPWINDOW.0 as isize));
+        // winit keeps a 1 px non-client strip at the top for the drop shadow; without the shadow
+        // it shows as a dark line across the whole window. Make the entire window client area.
+        use windows::Win32::UI::Shell::SetWindowSubclass;
+        if SetWindowSubclass(hwnd, Some(whole_client_area), 1, 0).as_bool() {
+            let flags = SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE;
+            let _ = SetWindowPos(hwnd, None, 0, 0, 0, 0, flags);
+        }
     }
     remove_frame(hwnd);
     true
+}
+
+/// Window subclass: answers WM_NCCALCSIZE before winit does, leaving the proposed rectangle as it
+/// is, which makes the whole window client area.
+unsafe extern "system" fn whole_client_area(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM, _id: usize, _data: usize) -> LRESULT {
+    if message == WM_NCCALCSIZE && wparam.0 != 0 {
+        return LRESULT(0);
+    }
+    unsafe { windows::Win32::UI::Shell::DefSubclassProc(hwnd, message, wparam, lparam) }
 }
 
 /// Windows 11 draws a thin border and rounds the corners of every window that keeps caption styles,
@@ -91,10 +107,15 @@ pub fn prepare_floating_window_by_title(title: &str) -> bool {
 /// window, far larger than what is drawn in it.
 fn remove_frame(hwnd: HWND) {
     use windows::Win32::Graphics::Dwm::{
-        DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DwmSetWindowAttribute,
+        DWMNCRP_DISABLED, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_NCRENDERING_POLICY, DWMWA_WINDOW_CORNER_PREFERENCE,
+        DWMWCP_DONOTROUND, DwmSetWindowAttribute,
     };
     unsafe {
-        // Both fail harmlessly on Windows 10, which draws neither.
+        // No non-client rendering at all: that is where the drop shadow comes from, which egui
+        // requests for every undecorated window and which outlines the whole transparent window.
+        let policy = DWMNCRP_DISABLED;
+        let _ = DwmSetWindowAttribute(hwnd, DWMWA_NCRENDERING_POLICY, (&raw const policy).cast(), std::mem::size_of_val(&policy) as u32);
+        // Border and corners are Windows 11 only and fail harmlessly on Windows 10.
         let none = DWMWA_COLOR_NONE;
         let _ = DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, (&raw const none).cast(), std::mem::size_of_val(&none) as u32);
         let corner = DWMWCP_DONOTROUND;

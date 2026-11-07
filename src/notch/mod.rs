@@ -438,6 +438,14 @@ impl Notch {
     fn apply_window_state(&mut self, ctx: &egui::Context, frame: &eframe::Frame, settings: &Settings, full_hide: bool) {
         if !self.prepared {
             platform::prepare_notch_window(frame);
+            // egui asks winit for a drop shadow on every window without decorations (its
+            // with_has_shadow only reaches macOS). Around this large, mostly transparent window
+            // the shadow shows as a frame far bigger than the notch.
+            #[cfg(windows)]
+            if let Some(window) = frame.winit_window() {
+                use winit::platform::windows::WindowExtWindows as _;
+                window.set_undecorated_shadow(false);
+            }
             self.prepared = true;
             self.cursor.running.store(true, Ordering::Relaxed);
         }
