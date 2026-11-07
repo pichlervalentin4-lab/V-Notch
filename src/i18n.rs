@@ -109,11 +109,34 @@ pub fn t(key: &str) -> String {
 
 /// Like [`t`], filling `{0}`, `{1}` … with `args`.
 pub fn tf(key: &str, args: &[&str]) -> String {
-    let mut text = t(key);
-    for (index, arg) in args.iter().enumerate() {
-        text = text.replace(&format!("{{{index}}}"), arg);
+    fill(&t(key), args)
+}
+
+/// Replaces `{n}` and .NET-style `{n:N0}` placeholders; the format part is dropped.
+fn fill(template: &str, args: &[&str]) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let replaced = after.find('}').and_then(|close| {
+            let inner = &after[..close];
+            let index: usize = inner.split(':').next()?.parse().ok()?;
+            Some((args.get(index)?, close))
+        });
+        match replaced {
+            Some((arg, close)) => {
+                out.push_str(arg);
+                rest = &after[close + 1..];
+            }
+            None => {
+                out.push('{');
+                rest = after;
+            }
+        }
     }
-    text
+    out.push_str(rest);
+    out
 }
 
 #[cfg(test)]
@@ -130,6 +153,15 @@ mod tests {
             parse_into(&mut only, raw);
             assert!(only.len() > 500, "{lang} has only {} keys", only.len());
         }
+    }
+
+    #[test]
+    fn fill_handles_plain_and_formatted_placeholders() {
+        assert_eq!(fill("Feels like {0}", &["10°"]), "Feels like 10°");
+        assert_eq!(fill("{0} messages · {1:N0} characters", &["3", "1200"]), "3 messages · 1200 characters");
+        assert_eq!(fill("{0} and {0}", &["a"]), "a and a");
+        assert_eq!(fill("missing {2} stays, {x} too", &["a"]), "missing {2} stays, {x} too");
+        assert_eq!(fill("open { brace", &[]), "open { brace");
     }
 
     #[test]

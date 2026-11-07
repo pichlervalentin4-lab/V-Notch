@@ -40,7 +40,7 @@ impl Notch {
         ui.painter().text(pos2(sky.right() - 16.0, sky.top() + 22.0), Align2::RIGHT_CENTER, icon, theme::icon_fill(22.0), Color32::WHITE);
         ui.painter().text(pos2(left, sky.top() + 62.0), Align2::LEFT_CENTER, format!("{:.0}°", forecast.temperature), theme::bold(44.0), Color32::WHITE);
         text_clipped(ui, pos2(left, sky.top() + 100.0), Align2::LEFT_CENTER, &t(condition_key(forecast.code)), theme::medium(13.0), Color32::WHITE, sky.width() - 32.0);
-        let feels = format!("{} {:.0}°", t("weather.feelsLike"), forecast.feels_like);
+        let feels = tf("weather.feelsLike", &[&format!("{:.0}°", forecast.feels_like)]);
         ui.painter().text(pos2(left, sky.top() + 120.0), Align2::LEFT_CENTER, feels, theme::regular(11.5), theme::alpha(Color32::WHITE, 0.8));
         if let Some(today) = forecast.days.first() {
             let range = format!("↑ {:.0}°   ↓ {:.0}°", today.max, today.min);

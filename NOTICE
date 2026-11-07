@@ -1,0 +1,10 @@
+V-Notch (Rust port)
+Copyright 2026 Valentin Pichler
+
+This product is a Rust port of V-Notch (https://github.com/DavidLeitnerHTL/V-Notch),
+licensed under the Apache License 2.0. The design, the feature set, the locale files
+in assets/locales and the logo come from that project. The code was rewritten in Rust.
+
+Fonts:
+- Inter, SIL Open Font License 1.1 (assets/fonts/Inter-LICENSE.txt)
+- Phosphor Icons, MIT License (assets/fonts/Phosphor-LICENSE.txt)

@@ -1,6 +1,6 @@
 //! The settings window. Changes apply at once and are saved a moment later.
 
-use crate::i18n::{self, t};
+use crate::i18n::{self, t, tf};
 use crate::icons;
 use crate::notch::kit::{rounded, text_clipped};
 use crate::notch::View;
@@ -437,9 +437,7 @@ impl SettingsWindow {
     fn updates(&mut self, ui: &mut Ui) {
         heading(ui, &t("settings.updates"));
         let s = &mut self.draft;
-        row(ui, &t("settings.currentVersion"), |ui| {
-            ui.label(env!("CARGO_PKG_VERSION"));
-        });
+        row(ui, &tf("settings.currentVersion", &[env!("CARGO_PKG_VERSION")]), |_ui| {});
         toggle_row(ui, &t("settings.privacy.autoUpdates"), &mut s.auto_check_updates);
         toggle_row(ui, &t("settings.updates.prerelease"), &mut s.include_prerelease_updates);
         let include = s.include_prerelease_updates;
@@ -457,7 +455,7 @@ impl SettingsWindow {
                 ui.label(RichText::new(t("settings.upToDate")).color(theme::GREEN));
             }
             UpdateStatus::Available { version, url } => {
-                ui.label(RichText::new(format!("{} {version}", t("settings.updateAvailable"))).color(theme::ORANGE));
+                ui.label(RichText::new(tf("settings.updateAvailable", &[&version.to_string()])).color(theme::ORANGE));
                 if ui.button(t("settings.download")).clicked() {
                     let _ = open::that_detached(url);
                 }
@@ -477,12 +475,12 @@ impl SettingsWindow {
             }
             if ui.button(t("settings.importSettings.btn")).clicked() {
                 match import_settings() {
-                    Some(imported) => {
+                    Ok(imported) => {
                         self.draft = imported;
                         i18n::set_language(&self.draft.language);
                         self.notice = Some(t("settings.import.success"));
                     }
-                    None => self.notice = Some(t("settings.import.error")),
+                    Err(error) => self.notice = Some(tf("settings.import.error", &[&error])),
                 }
             }
         });
@@ -508,7 +506,7 @@ impl SettingsWindow {
 
     fn about(&mut self, ui: &mut Ui) {
         heading(ui, "V-Notch");
-        ui.label(format!("{} {}", t("settings.currentVersion"), env!("CARGO_PKG_VERSION")));
+        ui.label(tf("settings.currentVersion", &[env!("CARGO_PKG_VERSION")]));
         ui.add_space(6.0);
         ui.label(t("port.settings.aboutText"));
         ui.add_space(6.0);
@@ -535,15 +533,19 @@ fn export_path() -> std::path::PathBuf {
 /// API keys are not part of the settings file, so they never end up in an export.
 fn export_settings(current: &Settings) -> String {
     let path = export_path();
-    let saved = serde_json::to_string_pretty(current).ok().is_some_and(|text| std::fs::write(&path, text).is_ok());
-    if saved { format!("{} {}", t("settings.export.success"), path.display()) } else { t("error.settingsSave") }
+    let saved = serde_json::to_string_pretty(current).map_err(|error| error.to_string()).and_then(|text| std::fs::write(&path, text).map_err(|error| error.to_string()));
+    match saved {
+        Ok(()) => format!("{} {}", t("settings.export.success"), path.display()),
+        Err(error) => tf("error.settingsSave", &[&error]),
+    }
 }
 
-fn import_settings() -> Option<Settings> {
-    let text = std::fs::read_to_string(export_path()).ok()?;
-    let mut imported = settings::parse(&text)?;
+fn import_settings() -> Result<Settings, String> {
+    let path = export_path();
+    let text = std::fs::read_to_string(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let mut imported = settings::parse(&text).ok_or_else(|| format!("{}: invalid JSON", path.display()))?;
     imported.sanitize();
-    Some(imported)
+    Ok(imported)
 }
 
 fn heading(ui: &mut Ui, text: &str) {

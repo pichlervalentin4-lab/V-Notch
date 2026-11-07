@@ -335,7 +335,7 @@ impl Spotlight {
         if search::run(hit) {
             self.close();
         } else {
-            self.hub.toast(crate::services::Toast::Info { icon: icons::WARNING, text: t("spotlight.launchFailed") });
+            self.hub.toast(crate::services::Toast::Info { icon: icons::WARNING, text: tf("spotlight.launchFailed", &[&hit.title]) });
         }
     }
 
@@ -478,7 +478,7 @@ impl Spotlight {
                 ui.painter().rect_filled(rect, rounded(10.0), fill);
                 text_clipped(ui, rect.left_center() + vec2(12.0, -7.0), Align2::LEFT_CENTER, &chat.title, theme::medium(12.5), theme::WHITE, rect.width() - 60.0);
                 let characters: usize = chat.messages.iter().map(|m| m.text.chars().count()).sum();
-                let meta = t("spotlight.ai.metadata").replace("{0}", &chat.messages.len().to_string()).replace("{1:N0}", &characters.to_string());
+                let meta = tf("spotlight.ai.metadata", &[&chat.messages.len().to_string(), &characters.to_string()]);
                 text_clipped(ui, rect.left_center() + vec2(12.0, 9.0), Align2::LEFT_CENTER, &meta, theme::regular(10.5), theme::FAINT, rect.width() - 60.0);
                 let delete = Rect::from_center_size(rect.right_center() - vec2(20.0, 0.0), vec2(26.0, 26.0));
                 let removed = kit::icon_button(ui, delete, icons::TRASH, 13.0, theme::DIM, ("ai-delete", chat.id)).clicked();

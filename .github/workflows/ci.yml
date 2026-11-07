@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, name: windows, bin: v-notch.exe }
+          - { os: ubuntu-latest, name: linux, bin: v-notch }
+          - { os: macos-latest, name: macos, bin: v-notch }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Linux packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libasound2-dev libssl-dev libxkbcommon-dev libxkbcommon-x11-0 \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgl1-mesa-dri libegl1 xvfb
+
+      # Failures are repeated as one annotation, so they can be read without opening the log.
+      - name: Build
+        run: |
+          set -o pipefail
+          if ! cargo build --release --locked 2>&1 | tee build.log; then
+            msg=$(grep -E -A8 '^error' build.log | head -120 | sed -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=build ${{ matrix.name }}::$msg"
+            exit 1
+          fi
+
+      - name: Test
+        run: |
+          set -o pipefail
+          if ! cargo test --release --locked 2>&1 | tee test.log; then
+            msg=$(grep -E -B2 -A10 'panicked|^error|FAILED' test.log | head -120 | sed -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=test ${{ matrix.name }}::$msg"
+            exit 1
+          fi
+          echo "::notice title=test ${{ matrix.name }}::$(grep -E '^test result' test.log | head -1)"
+
+      # Starts the real app on a virtual X server and saves a picture of the weather tab.
+      - name: Demo run (Linux, Xvfb)
+        if: runner.os == 'Linux'
+        run: |
+          set +e
+          xvfb-run -a -s "-screen 0 1920x1080x24" timeout 60 ./target/release/v-notch \
+            --demo --language de --view Weather --screenshot demo-linux.png > demo.log 2>&1
+          code=$?
+          size=$(stat -c %s demo-linux.png 2>/dev/null || echo 0)
+          log=$(tail -20 demo.log | sed -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+          if [ "$code" -ne 0 ] || [ "$size" -lt 20000 ]; then
+            echo "::error title=demo linux::exit $code, png $size bytes%0A$log"
+            exit 1
+          fi
+          echo "::notice title=demo linux::exit $code, png $size bytes"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v-notch-${{ matrix.name }}
+          path: |
+            target/release/${{ matrix.bin }}
+            demo-linux.png
+          if-no-files-found: warn

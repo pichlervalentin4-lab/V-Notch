@@ -91,7 +91,7 @@ impl Notch {
             return;
         }
         if !self.hub.claude_listening && !self.hub.demo {
-            ui.painter().text(center + vec2(0.0, 6.0), Align2::CENTER_CENTER, t("control.claude.portBusy"), theme::regular(12.5), theme::ORANGE);
+            ui.painter().text(center + vec2(0.0, 6.0), Align2::CENTER_CENTER, tf("control.claude.portBusy", &[&claude::PORT.to_string()]), theme::regular(12.5), theme::ORANGE);
             return;
         }
         if installed {
