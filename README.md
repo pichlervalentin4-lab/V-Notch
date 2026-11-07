@@ -95,6 +95,8 @@ cargo build --release
 | `--screenshot <file.png>` | Save a picture of the window after 2.5 s and quit |
 | `--exit-after <seconds>` | Quit after the given time |
 | `--stats` | With `--exit-after`: print frames per second, why each frame was drawn and animation smoothness |
+| `--click <x,y@seconds>` | Click at a point of the window at that time, without moving the real mouse (repeatable) |
+| `--profile <folder>` | Run a second, real instance with its own settings, next to the one already running |
 
 Example: `v-notch --demo --language de --view Weather --screenshot weather.png`
 

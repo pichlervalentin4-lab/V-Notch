@@ -67,14 +67,38 @@ pub fn prepare_notch_window(window: &impl HasWindowHandle) {
         let wanted = (style | (WS_EX_TOOLWINDOW.0 | WS_EX_NOACTIVATE.0) as isize) & !(WS_EX_APPWINDOW.0 as isize);
         SetWindowLongPtrW(hwnd, GWL_EXSTYLE, wanted);
     }
+    remove_frame(hwnd);
 }
 
 /// A floating window like Spotlight stays out of the taskbar and Alt+Tab but may take keyboard focus.
-pub fn prepare_floating_window(window: &impl HasWindowHandle) {
-    let Some(hwnd) = hwnd_of(window) else { return };
+/// Found by its title, because egui gives no handle for extra viewports. Returns whether it was found.
+pub fn prepare_floating_window_by_title(title: &str) -> bool {
+    let title = wide(title);
+    let Ok(hwnd) = (unsafe { FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())) }) else { return false };
+    if hwnd.is_invalid() {
+        return false;
+    }
     unsafe {
         let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
         SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (style | WS_EX_TOOLWINDOW.0 as isize) & !(WS_EX_APPWINDOW.0 as isize));
+    }
+    remove_frame(hwnd);
+    true
+}
+
+/// Windows 11 draws a thin border and rounds the corners of every window that keeps caption styles,
+/// which winit does even without decorations. On a transparent window that border outlines the whole
+/// window, far larger than what is drawn in it.
+fn remove_frame(hwnd: HWND) {
+    use windows::Win32::Graphics::Dwm::{
+        DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DwmSetWindowAttribute,
+    };
+    unsafe {
+        // Both fail harmlessly on Windows 10, which draws neither.
+        let none = DWMWA_COLOR_NONE;
+        let _ = DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, (&raw const none).cast(), std::mem::size_of_val(&none) as u32);
+        let corner = DWMWCP_DONOTROUND;
+        let _ = DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, (&raw const corner).cast(), std::mem::size_of_val(&corner) as u32);
     }
 }
 

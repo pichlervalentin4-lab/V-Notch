@@ -27,6 +27,9 @@ pub struct Options {
     pub toast: Option<String>,
     pub query: Option<String>,
     pub stats: bool,
+    pub profile: Option<PathBuf>,
+    /// Clicks for test runs: (seconds after start, position in points).
+    pub clicks: Vec<(f32, egui::Pos2)>,
     pub screenshot: Option<PathBuf>,
     pub exit_after: Option<f32>,
     pub language: Option<String>,
@@ -49,6 +52,8 @@ pub struct VNotchApp {
     reasons: std::collections::HashMap<&'static str, u64>,
     last_animation_frame: Option<Instant>,
     animation_gaps: Vec<f32>,
+    next_click: usize,
+    pressed_at: Option<egui::Pos2>,
 }
 
 impl VNotchApp {
@@ -69,7 +74,7 @@ impl VNotchApp {
 
         // A test run opens exactly what it wants to look at, and keeps it open while the pointer is elsewhere.
         if let Some(view) = options.view.as_deref().and_then(View::from_token) {
-            if options.demo {
+            if options.demo || options.profile.is_some() {
                 settings.update(|s| s.disable_mouse_leave_auto_close = true);
             }
             notch.open(view);
@@ -109,6 +114,8 @@ impl VNotchApp {
             reasons: std::collections::HashMap::new(),
             last_animation_frame: None,
             animation_gaps: Vec::new(),
+            next_click: 0,
+            pressed_at: None,
         }
     }
 
@@ -206,6 +213,24 @@ impl eframe::App for VNotchApp {
 
     fn persist_egui_memory(&self) -> bool {
         false
+    }
+
+    /// Test runs click without touching the real mouse: press in one frame, release in the next.
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        if let Some(pos) = self.pressed_at.take() {
+            raw_input.events.push(button(pos, false));
+            return;
+        }
+        let elapsed = self.started.elapsed().as_secs_f32();
+        if let Some(&(at, pos)) = self.options.clicks.get(self.next_click)
+            && elapsed >= at
+        {
+            self.next_click += 1;
+            raw_input.events.push(egui::Event::PointerMoved(pos));
+            raw_input.events.push(button(pos, true));
+            self.pressed_at = Some(pos);
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {

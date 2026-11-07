@@ -30,11 +30,14 @@ struct Job {
     conversion: Option<String>,
 }
 
+const TITLE: &str = "V-Notch Translation";
+
 pub struct Translator {
     hub: Arc<Hub>,
     pub open: bool,
     job: Arc<Mutex<Job>>,
     viewport_id: ViewportId,
+    frame_removed: bool,
 }
 
 /// A price found in text.
@@ -111,7 +114,7 @@ pub fn build_prompt(text: &str, target: &str) -> String {
 
 impl Translator {
     pub fn new(hub: Arc<Hub>) -> Self {
-        Self { hub, open: false, job: Arc::new(Mutex::new(Job::default())), viewport_id: ViewportId::from_hash_of("v-notch-translate") }
+        Self { hub, open: false, job: Arc::new(Mutex::new(Job::default())), viewport_id: ViewportId::from_hash_of("v-notch-translate"), frame_removed: false }
     }
 
     /// Copies the selection of the active app, then translates it.
@@ -158,11 +161,12 @@ impl Translator {
 
     pub fn show_viewport(&mut self, ctx: &egui::Context, center_x: f32, top: f32) {
         if !self.open {
+            self.frame_removed = false;
             return;
         }
         let width = WIDTH + MARGIN * 2.0;
         let builder = ViewportBuilder::default()
-            .with_title("V-Notch Translation")
+            .with_title(TITLE)
             .with_decorations(false)
             .with_transparent(true)
             .with_always_on_top()
@@ -171,6 +175,11 @@ impl Translator {
             .with_position([center_x - width / 2.0, top]);
         let id = self.viewport_id;
         ctx.show_viewport_immediate(id, builder, |ui, _| self.window(ui));
+        // Windows 11 would outline the whole transparent window, shadow margin included.
+        #[cfg(windows)]
+        if !self.frame_removed {
+            self.frame_removed = crate::platform::prepare_floating_window_by_title(TITLE);
+        }
     }
 
     fn window(&mut self, ui: &mut Ui) {

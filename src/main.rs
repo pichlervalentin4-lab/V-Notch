@@ -34,6 +34,17 @@ fn parse_args() -> Result<Options, String> {
             "--spotlight-ai" => options.spotlight_ai = true,
             "--query" => options.query = Some(value("--query")?),
             "--stats" => options.stats = true,
+            "--profile" => options.profile = Some(PathBuf::from(value("--profile")?)),
+            "--click" => {
+                // "x,y@seconds", in points of the main window.
+                let text = value("--click")?;
+                let parse = || -> Option<(f32, eframe::egui::Pos2)> {
+                    let (position, at) = text.split_once('@')?;
+                    let (x, y) = position.split_once(',')?;
+                    Some((at.trim().parse().ok()?, eframe::egui::pos2(x.trim().parse().ok()?, y.trim().parse().ok()?)))
+                };
+                options.clicks.push(parse().ok_or("--click needs x,y@seconds")?);
+            }
             "--settings" => options.settings_section = Some(value("--settings")?),
             "--island" => options.island = true,
             "--toast" => options.toast = Some(value("--toast")?),
@@ -78,6 +89,9 @@ fn main() {
     if options.demo {
         let home = std::env::temp_dir().join(format!("v-notch-demo-{}", std::process::id()));
         paths::set_override(home);
+    } else if let Some(profile) = &options.profile {
+        // A second, real instance with its own settings, e.g. for testing next to the running one.
+        paths::set_override(profile.clone());
     }
 
     // Wayland clients cannot place themselves or stay on top, so XWayland is preferred where it exists.

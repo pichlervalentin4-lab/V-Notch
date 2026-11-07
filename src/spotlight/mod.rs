@@ -29,6 +29,8 @@ enum Mode {
     Ai,
 }
 
+const TITLE: &str = "V-Notch Spotlight";
+
 pub struct Spotlight {
     hub: Arc<Hub>,
     pub open: bool,
@@ -46,6 +48,7 @@ pub struct Spotlight {
     confirm: Option<Hit>,
     textures: Textures,
     pub viewport_id: ViewportId,
+    frame_removed: bool,
     /// Test runs keep the window open even without focus.
     pub keep_open: bool,
 }
@@ -72,6 +75,7 @@ impl Spotlight {
             confirm: None,
             textures: Textures::default(),
             viewport_id: ViewportId::from_hash_of("v-notch-spotlight"),
+            frame_removed: false,
             keep_open: false,
         }
     }
@@ -150,13 +154,14 @@ impl Spotlight {
     /// Call every frame from the main viewport. Draws the window while it is open.
     pub fn show_viewport(&mut self, ctx: &egui::Context, screen_center_x: f32, top: f32) {
         if !self.open {
+            self.frame_removed = false;
             return;
         }
         self.refresh_results();
         let height = self.height() + MARGIN * 2.0;
         let width = WIDTH + MARGIN * 2.0;
         let builder = ViewportBuilder::default()
-            .with_title("V-Notch Spotlight")
+            .with_title(TITLE)
             .with_decorations(false)
             .with_transparent(true)
             .with_always_on_top()
@@ -166,6 +171,11 @@ impl Spotlight {
             .with_position([screen_center_x - width / 2.0, top]);
         let id = self.viewport_id;
         ctx.show_viewport_immediate(id, builder, |ui, _class| self.window(ui));
+        // Windows 11 would outline the whole transparent window, shadow margin included.
+        #[cfg(windows)]
+        if !self.frame_removed {
+            self.frame_removed = crate::platform::prepare_floating_window_by_title(TITLE);
+        }
     }
 
     fn window(&mut self, ui: &mut Ui) {

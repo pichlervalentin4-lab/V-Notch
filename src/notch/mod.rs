@@ -381,8 +381,7 @@ impl Notch {
     fn target_size(&self, settings: &Settings, activity: &Activity) -> (f32, f32, f32) {
         let (base_w, base_h) = Self::compact_base(settings);
         if self.expanded {
-            let (w, h) = self.view.size();
-            let h = if self.view == View::Claude { self.claude_ui.wanted_height.clamp(150.0, 420.0) } else { h };
+            let (w, h) = open_size(self.view, self.claude_ui.wanted_height);
             let radius = if settings.enable_dynamic_island_mode { 32.0 } else { 24.0 };
             return (w, h, radius);
         }
@@ -531,7 +530,8 @@ impl Notch {
         self.view_alpha = approach(self.view_alpha, 1.0, 12.0, dt);
 
         let (compact_w, compact_h) = Self::compact_base(&settings);
-        let open_progress = ((self.height.value - compact_h) / (self.view.size().1 - compact_h).max(1.0)).clamp(0.0, 1.0);
+        // Measured against the height this tab really opens to: the Claude tab's height follows its content.
+        let open_progress = open_progress(self.height.value, compact_h, open_size(self.view, self.claude_ui.wanted_height).1);
         let content_target = if self.expanded { smoothstep(0.55, 0.95, open_progress) } else { 0.0 };
         self.content = approach(self.content, content_target, 18.0, dt);
         let _ = compact_w;
@@ -1100,6 +1100,17 @@ impl Notch {
     }
 }
 
+/// Size of the open notch for a tab. The Claude tab grows with its sessions, the others are fixed.
+fn open_size(view: View, claude_height: f32) -> (f32, f32) {
+    let (w, h) = view.size();
+    if view == View::Claude { (w, claude_height.clamp(150.0, 420.0)) } else { (w, h) }
+}
+
+/// How far the notch has opened: 0 at the collapsed height, 1 at the tab's open height.
+fn open_progress(height: f32, compact_h: f32, open_h: f32) -> f32 {
+    ((height - compact_h) / (open_h - compact_h).max(1.0)).clamp(0.0, 1.0)
+}
+
 /// On macOS the cursor comes in points; everywhere else in physical pixels, like the monitor layout.
 fn platform_scale(pixels_per_point: f32) -> f32 {
     if cfg!(target_os = "macos") { 1.0 } else { pixels_per_point }
@@ -1226,6 +1237,22 @@ mod tests {
         for token in crate::settings::DEFAULT_TABS.split(',') {
             assert!(View::from_token(token).is_some(), "{token}");
         }
+    }
+
+    #[test]
+    fn content_shows_once_the_notch_reaches_the_tab_height() {
+        let compact_h = 32.0;
+        // An empty Claude tab is only 150 px tall; at that height it is fully open.
+        let (_, claude_h) = open_size(View::Claude, 150.0);
+        assert_eq!(claude_h, 150.0);
+        assert_eq!(open_progress(150.0, compact_h, claude_h), 1.0);
+        // With sessions it grows, up to its limit.
+        assert_eq!(open_size(View::Claude, 900.0).1, 420.0);
+        assert_eq!(open_size(View::Media, 150.0), View::Media.size());
+        // Half way there means half open; the collapsed notch is closed.
+        let (_, media_h) = open_size(View::Media, 150.0);
+        assert!((open_progress((compact_h + media_h) / 2.0, compact_h, media_h) - 0.5).abs() < 1e-6);
+        assert_eq!(open_progress(compact_h, compact_h, media_h), 0.0);
     }
 
     #[test]
