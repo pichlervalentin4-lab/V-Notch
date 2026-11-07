@@ -47,6 +47,19 @@ pub struct SystemState {
     pub privacy: PrivacyInfo,
     pub fullscreen: FullscreenKind,
     pub idle_seconds: f32,
+    /// Round trip to 1.1.1.1 in milliseconds, like the original's ping tile (a TCP handshake here,
+    /// which needs no administrator rights the way ICMP sockets do).
+    pub ping_ms: Option<f32>,
+}
+
+/// The host the ping tile measures, shown under its value.
+pub const PING_HOST: &str = "1.1.1.1";
+
+fn measure_ping() -> Option<f32> {
+    let address = std::net::SocketAddr::from(([1, 1, 1, 1], 443));
+    let started = Instant::now();
+    std::net::TcpStream::connect_timeout(&address, Duration::from_millis(1500)).ok()?;
+    Some(started.elapsed().as_secs_f32() * 1000.0)
 }
 
 pub struct SystemService {
@@ -161,6 +174,7 @@ impl SystemService {
                     );
                     (next.top_cpu, next.top_memory) = top_processes(&system);
                     next.gpu = read_gpu();
+                    next.ping_ms = measure_ping();
                 }
             }
             last_tick = Instant::now();
@@ -232,6 +246,7 @@ impl SystemService {
                 privacy: PrivacyInfo { mic: vec!["Discord".into()], camera: Vec::new(), camera_detectable: true },
                 fullscreen: FullscreenKind::None,
                 idle_seconds: 0.0,
+                ping_ms: Some(16.0),
             };
         }
     }

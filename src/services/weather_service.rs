@@ -131,11 +131,13 @@ fn demo_forecast() -> Forecast {
             }
         })
         .collect();
-    let days = ["2026-11-06", "2026-11-07", "2026-11-08", "2026-11-09", "2026-11-10", "2026-11-11", "2026-11-12"]
-        .iter()
+    // The week starts today, so the demo's first row reads "Today".
+    let today = chrono::Local::now().date_naive();
+    let days = (0..7)
+        .map(|i| (today + chrono::Days::new(i)).format("%Y-%m-%d").to_string())
         .enumerate()
         .map(|(i, date)| DayForecast {
-            date: (*date).to_string(),
+            date: date.clone(),
             code: [2, 61, 3, 0, 1, 71, 2][i],
             max: 13.0 - i as f32,
             min: 5.0 - i as f32 * 0.5,
@@ -152,9 +154,11 @@ fn demo_forecast() -> Forecast {
         humidity: 72.0,
         wind: 9.0,
         gusts: 21.0,
+        wind_direction: 240.0,
         code: 2,
         is_day: true,
         hours,
         days,
+        fetched_at: "14:05".into(),
     }
 }

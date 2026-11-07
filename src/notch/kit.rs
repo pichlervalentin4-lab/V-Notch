@@ -1,8 +1,7 @@
 //! Small drawing and input helpers shared by the notch views.
 
-use crate::anim::lerp;
 use crate::theme;
-use eframe::egui::{self, Align2, Color32, CornerRadius, FontId, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2, pos2, vec2};
+use eframe::egui::{self, Align2, Color32, CornerRadius, FontId, Pos2, Rect, Response, Sense, Ui, Vec2, pos2, vec2};
 
 pub fn rounded(radius: f32) -> CornerRadius {
     CornerRadius::same(radius.clamp(0.0, 255.0) as u8)
@@ -13,7 +12,7 @@ pub fn card(ui: &Ui, rect: Rect, radius: f32, fill: Color32) {
 }
 
 /// A texture made once and kept for the whole run: gradients and soft shapes.
-fn cached_texture(ctx: &egui::Context, key: &str, make: impl FnOnce() -> egui::ColorImage) -> egui::TextureId {
+pub(super) fn cached_texture(ctx: &egui::Context, key: &str, make: impl FnOnce() -> egui::ColorImage) -> egui::TextureId {
     let id = egui::Id::new(("v-notch-texture", key));
     if let Some(handle) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
         return handle.id();
@@ -24,17 +23,21 @@ fn cached_texture(ctx: &egui::Context, key: &str, make: impl FnOnce() -> egui::C
     texture
 }
 
-/// A rounded rectangle with a vertical gradient. egui fills it like any rounded rectangle,
-/// so the corners stay smooth and anti-aliased.
-pub fn gradient_rect(ui: &Ui, rect: Rect, radius: f32, top: Color32, bottom: Color32) {
-    let key = format!("gradient-{:?}-{:?}", top.to_array(), bottom.to_array());
+/// A rounded rectangle with a horizontal gradient from `left` to `right`.
+pub fn horizontal_gradient_rect(ui: &Ui, rect: Rect, radius: f32, left: Color32, right: Color32) {
+    let key = format!("hgradient-{:?}-{:?}", left.to_array(), right.to_array());
     let texture = cached_texture(ui.ctx(), &key, || {
-        const ROWS: usize = 128;
-        let pixels = (0..ROWS).map(|row| lerp_color(top, bottom, row as f32 / (ROWS - 1) as f32)).collect();
-        egui::ColorImage::new([1, ROWS], pixels)
+        const COLUMNS: usize = 128;
+        let pixels = (0..COLUMNS).map(|column| lerp_color(left, right, column as f32 / (COLUMNS - 1) as f32)).collect();
+        egui::ColorImage::new([COLUMNS, 1], pixels)
     });
     let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
     ui.painter().add(egui::epaint::RectShape::filled(rect, rounded(radius), Color32::WHITE).with_texture(texture, uv));
+}
+
+/// A plain horizontal fade over `rect`, e.g. to let text run out into the black notch.
+pub fn horizontal_fade(ui: &Ui, rect: Rect, left: Color32, right: Color32) {
+    horizontal_gradient_rect(ui, rect, 0.0, left, right);
 }
 
 pub fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
@@ -205,17 +208,6 @@ pub fn slider(ui: &mut Ui, rect: Rect, value: f32, color: Color32, id: impl std:
     None
 }
 
-pub fn toggle(ui: &mut Ui, rect: Rect, on: bool, color: Color32, id: impl std::hash::Hash + std::fmt::Debug) -> Response {
-    let response = ui.interact(rect, ui.id().with(id), Sense::click());
-    let t = ui.ctx().animate_bool(response.id.with("t"), on);
-    let track = if on { theme::alpha(color, lerp(0.4, 1.0, t)) } else { theme::alpha(Color32::WHITE, 0.2) };
-    ui.painter().rect_filled(rect, rounded(rect.height() / 2.0), track);
-    let radius = rect.height() / 2.0 - 2.0;
-    let x = lerp(rect.left() + radius + 2.0, rect.right() - radius - 2.0, t);
-    ui.painter().circle_filled(pos2(x, rect.center().y), radius, Color32::WHITE);
-    response
-}
-
 /// A pill-shaped text button.
 pub fn pill_button(ui: &mut Ui, rect: Rect, text: &str, fill: Color32, color: Color32, id: impl std::hash::Hash + std::fmt::Debug) -> Response {
     let response = ui.interact(rect, ui.id().with(id), Sense::click());
@@ -223,23 +215,6 @@ pub fn pill_button(ui: &mut Ui, rect: Rect, text: &str, fill: Color32, color: Co
     ui.painter().rect_filled(rect, rounded(rect.height() / 2.0), fill);
     text_clipped(ui, rect.center(), Align2::CENTER_CENTER, text, theme::medium(12.0), color, rect.width() - 12.0);
     response
-}
-
-/// A round progress ring, as used for the timer.
-pub fn ring(ui: &Ui, center: Pos2, radius: f32, width: f32, progress: f32, color: Color32) {
-    ui.painter().circle_stroke(center, radius, Stroke::new(width, theme::alpha(Color32::WHITE, 0.14)));
-    let progress = progress.clamp(0.0, 1.0);
-    if progress <= 0.0 {
-        return;
-    }
-    let steps = ((progress * 64.0) as usize).max(2);
-    let points: Vec<Pos2> = (0..=steps)
-        .map(|i| {
-            let angle = -std::f32::consts::FRAC_PI_2 + std::f32::consts::TAU * progress * i as f32 / steps as f32;
-            center + radius * Vec2::angled(angle)
-        })
-        .collect();
-    ui.painter().add(egui::Shape::line(points, Stroke::new(width, color)));
 }
 
 /// Divides a rect into `count` equal columns with `gap` between them.

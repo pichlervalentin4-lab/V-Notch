@@ -3,8 +3,8 @@
 mod camera;
 mod claude;
 mod controls;
+pub mod glyph;
 pub mod kit;
-mod legion;
 mod media;
 mod mixer;
 mod shelf;
@@ -30,10 +30,14 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 /// The window never changes size: it stays large and clear, and clicks pass through outside the notch.
-pub const WINDOW_W: f32 = 820.0;
+/// As wide as the original's, so the 920-point clipboard tray fits with its shadow.
+pub const WINDOW_W: f32 = 1016.0;
 pub const WINDOW_H: f32 = 500.0;
 const ISLAND_TOP: f32 = 8.0;
 const NAV_H: f32 = 30.0;
+/// The nav icons start this far below the top edge, one every `NAV_SLOT` points (22 wide plus 4 gap).
+const NAV_TOP: f32 = 3.0;
+const NAV_SLOT: f32 = 26.0;
 const IDLE_SLIM_WIDTH: f32 = 150.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -76,16 +80,30 @@ impl View {
         })
     }
 
+    /// Icon-font symbol, for the tab list in the settings window.
     pub fn icon(self) -> &'static str {
         match self {
             View::Media => icons::HOUSE,
             View::Shelf => icons::TRAY,
             View::Controls => icons::SLIDERS_HORIZONTAL,
             View::Claude => icons::SPARKLE,
-            View::Weather => icons::CLOUD_SUN,
+            View::Weather => icons::CLOUD,
             View::Legion => icons::GAUGE,
             View::Mixer => icons::SPEAKER_HIGH,
             View::Camera => icons::CAMERA,
+        }
+    }
+
+    /// The original's icon for the nav bar.
+    pub fn glyph(self) -> glyph::Glyph {
+        match self {
+            View::Media => glyph::HOME,
+            View::Shelf => glyph::TRAY,
+            View::Controls | View::Legion => glyph::TOGGLES,
+            View::Claude => glyph::CLAUDE,
+            View::Weather => glyph::WEATHER,
+            View::Mixer => glyph::SPEAKER,
+            View::Camera => glyph::CAMERA,
         }
     }
 
@@ -102,15 +120,14 @@ impl View {
         }
     }
 
-    /// Width and height of the opened notch for this view.
+    /// Width and height of the opened notch for this view, as in the original.
     fn size(self) -> (f32, f32) {
         match self {
-            View::Media => (540.0, 196.0),
-            View::Shelf => (720.0, 320.0),
-            View::Controls => (720.0, 400.0),
+            View::Media => (480.0, 147.0),
+            View::Shelf => (920.0, 268.0),
+            View::Controls | View::Legion => (720.0, 378.0),
             View::Claude => (720.0, 400.0),
-            View::Weather => (720.0, 380.0),
-            View::Legion => (560.0, 300.0),
+            View::Weather => (720.0, 372.0),
             View::Mixer => (720.0, 378.0),
             View::Camera => (520.0, 328.0),
         }
@@ -343,13 +360,9 @@ impl Notch {
             .filter_map(View::from_token)
             .filter(|view| *view == View::Media || settings.tab_visible(view.token()))
             .filter(|view| *view != View::Camera || !settings.hide_camera)
-            .filter(|view| *view != View::Legion || self.legion_available())
+            // Like the original, the Legion controls live in the controls tab; no tab of their own.
+            .filter(|view| *view != View::Legion)
             .collect()
-    }
-
-    fn legion_available(&self) -> bool {
-        use crate::services::legion::LegionStatus;
-        self.hub.legion.status.lock().is_ok_and(|status| *status != LegionStatus::Unsupported)
     }
 
     pub fn open(&mut self, view: View) {
@@ -385,7 +398,7 @@ impl Notch {
         let (base_w, base_h) = Self::compact_base(settings);
         if self.expanded {
             let (w, h) = open_size(self.view, self.claude_ui.wanted_height);
-            let radius = if settings.enable_dynamic_island_mode { 32.0 } else { 24.0 };
+            let radius = if settings.enable_dynamic_island_mode { 32.0 } else { 20.0 };
             return (w, h, radius);
         }
         let collapsed_radius = if settings.enable_dynamic_island_mode { base_h / 2.0 } else { settings.corner_radius };
@@ -603,8 +616,10 @@ impl Notch {
         }
         if self.expanded {
             return match self.view {
-                View::Media => (ms(if self.lyrics_open { 33 } else { 100 }), "media tab"),
-                View::Camera => (ms(33), "camera tab"),
+                // The clock's second hand sweeps, as the original's (33 ms).
+                View::Media => (ms(33), "media tab"),
+                // The colour fields drift at 24 frames a second, like the original's.
+                View::Controls | View::Legion => (ms(42), "controls tab"),
                 View::Mixer => (ms(50), "mixer tab"),
                 View::Weather => (ms(40), "weather tab"),
                 _ => (ms(250), "other tab"),
@@ -628,7 +643,8 @@ impl Notch {
         let showing = |view: View| self.expanded && self.view == view;
         self.hub.audio.mixer_visible.store(showing(View::Mixer), Ordering::Relaxed);
         self.hub.system.details_wanted.store(showing(View::Controls), Ordering::Relaxed);
-        self.hub.legion.visible.store(showing(View::Legion), Ordering::Relaxed);
+        // The Legion controls live in the controls tab now, as in the original.
+        self.hub.legion.visible.store(showing(View::Controls), Ordering::Relaxed);
         let playing = self.hub.media.state.lock().is_ok_and(|s| s.info.as_ref().is_some_and(|i| i.playing));
         self.hub.audio.meter_wanted.store(playing && !self.expanded, Ordering::Relaxed);
 
@@ -680,7 +696,14 @@ impl Notch {
                 });
             }
         }
-        if let Ok(slot) = self.claude_ui.limits_share.lock() {
+        if self.hub.demo && self.limits.is_none() {
+            use crate::services::claude::{LimitWindow, Limits};
+            let hours = |h: i64| Some(chrono::Utc::now() + chrono::TimeDelta::minutes(h * 60 + 13));
+            self.limits = Some(Limits {
+                five_hour: Some(LimitWindow { used_percent: 18.0, resets_at: hours(3) }),
+                week: Some(LimitWindow { used_percent: 11.0, resets_at: hours(160) }),
+            });
+        } else if let Ok(slot) = self.claude_ui.limits_share.lock() {
             self.limits.clone_from(&slot);
         }
         let _ = LegionStatus::Unsupported;
@@ -752,13 +775,8 @@ impl Notch {
         };
 
         if settings.enable_shadow {
-            let strength = lerp(0.35, 0.55, self.content);
-            let shadow = Shadow {
-                offset: [0, 6 + (self.content * 6.0) as i8],
-                blur: 18 + (self.content * 22.0) as u8,
-                spread: 0,
-                color: theme::alpha(Color32::BLACK, strength),
-            };
+            // The original's NotchSoftShadow: a Gaussian falloff (blur radius 20) shifted 4 down, at 60 %.
+            let shadow = Shadow { offset: [0, 4], blur: 30, spread: 0, color: theme::alpha(Color32::BLACK, 0.6) };
             ui.painter().add(shadow.as_shape(rect, corners));
         }
         if settings.enable_glow_on_hover && self.hover > 0.01 {
@@ -784,20 +802,7 @@ impl Notch {
             let line = theme::alpha(Color32::WHITE, 0.16);
             ui.painter().rect_stroke(rect, corners, Stroke::new(1.0, line), egui::StrokeKind::Inside);
         }
-
-        if self.content > 0.01 && self.expanded && self.view == View::Media && settings.show_media_art_background {
-            self.paint_art_background(ui, rect, corners, settings);
-        }
-    }
-
-    fn paint_art_background(&mut self, ui: &mut Ui, rect: Rect, corners: CornerRadius, settings: &Settings) {
-        let Some((_, blur)) = self.current_art_textures(ui.ctx()) else { return };
-        let tint = theme::alpha(Color32::WHITE, self.content * if settings.enable_blur_effects { 0.55 } else { 0.0 });
-        let shape = egui::epaint::RectShape::filled(rect, corners, tint)
-            .with_texture(blur.id(), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)));
-        ui.painter().add(shape);
-        let overlay = theme::alpha(Color32::BLACK, settings.media_blur_dark_overlay * self.content);
-        ui.painter().rect_filled(rect, corners, overlay);
+        // The media tab paints the artwork's glow itself (media.rs), as the original's MediaBackground.
     }
 
     pub fn current_art_textures(&mut self, ctx: &egui::Context) -> Option<(TextureHandle, TextureHandle)> {
@@ -1044,19 +1049,23 @@ impl Notch {
         }
     }
 
+    /// The original's nav bar: 22-point cells 26 points apart from 14 in, the open tab's icon
+    /// white and the others at 45 %, the gear at the right and the battery next to it on the media tab.
     fn paint_nav(&mut self, ui: &mut Ui, rect: Rect, settings: &Settings) {
         let tabs = self.visible_tabs(settings);
-        let mut x = rect.left() + 14.0;
-        let y = rect.top() + NAV_H / 2.0 + 3.0;
+        let y = rect.top() + NAV_TOP + 11.0;
+        let waiting = self.hub.claude.snapshot().1.len();
         for (index, view) in tabs.iter().enumerate() {
-            let cell = Rect::from_center_size(pos2(x + 11.0, y), vec2(24.0, 24.0));
+            let cell = Rect::from_center_size(pos2(rect.left() + 14.0 + 11.0 + NAV_SLOT * index as f32, y), vec2(22.0, 22.0));
             let selected = *view == self.view;
-            let color = if selected { theme::WHITE } else { theme::FAINT };
-            let response = if selected {
-                kit::icon_button_fill(ui, cell, view.icon(), 15.0, color, ("tab", index))
-            } else {
-                kit::icon_button(ui, cell, view.icon(), 15.0, color, ("tab", index))
-            };
+            let response = ui.interact(cell, ui.id().with(("tab", index)), Sense::click());
+            let hover = ui.ctx().animate_bool_with_time(response.id.with("hover"), response.hovered(), 0.12);
+            let opacity = if selected { 1.0 } else { lerp(0.45, 0.75, hover) };
+            let scale = if response.is_pointer_button_down_on() { 0.88 } else { 1.0 };
+            glyph::paint(ui.painter(), cell.center(), 15.0 * scale, view.glyph(), theme::alpha(Color32::WHITE, opacity));
+            if *view == View::Claude && waiting > 0 {
+                ui.painter().circle_filled(pos2(cell.right() - 2.5, cell.top() + 3.5), 3.5, Color32::from_rgb(0xFF, 0xD6, 0x0A));
+            }
             let response = response.on_hover_text(t(view.label_key()));
             if response.clicked() && !selected {
                 self.view_alpha = 0.0;
@@ -1064,50 +1073,52 @@ impl Notch {
                 self.lyrics_open = false;
                 self.hub.play(Tone::Tap);
             }
-            x += 27.0;
         }
-        let mut right = rect.right() - 14.0;
-        let gear = Rect::from_center_size(pos2(right - 11.0, y), vec2(24.0, 24.0));
-        if kit::icon_button(ui, gear, icons::GEAR_SIX, 15.0, theme::DIM, "nav-settings").on_hover_text(t("tray.settings")).clicked() {
+
+        let gear = Rect::from_center_size(pos2(rect.right() - 13.0 - 12.0, rect.top() + 2.0 + 12.0), vec2(24.0, 24.0));
+        let response = ui.interact(gear, ui.id().with("nav-settings"), Sense::click());
+        let hover = ui.ctx().animate_bool_with_time(response.id.with("hover"), response.hovered(), 0.15);
+        glyph::paint(ui.painter(), gear.center(), 16.2, glyph::GEAR, theme::alpha(Color32::WHITE, lerp(0.8, 1.0, hover)));
+        if response.on_hover_text(t("tray.settings")).clicked() {
             self.request_settings = true;
         }
-        right -= 28.0;
-        if settings.enable_spotlight {
-            let search = Rect::from_center_size(pos2(right - 11.0, y), vec2(24.0, 24.0));
-            if kit::icon_button(ui, search, icons::MAGNIFYING_GLASS, 15.0, theme::DIM, "nav-spotlight").clicked() {
-                self.request_spotlight = true;
-            }
-            right -= 30.0;
-        }
-        if settings.show_battery_indicator {
+
+        if self.view == View::Media && settings.show_battery_indicator {
             let battery = self.hub.system.state.lock().ok().and_then(|s| s.battery.clone());
             if let Some(battery) = battery {
-                let text = format!("{:.0}%", battery.percent);
-                ui.painter().text(pos2(right, y), Align2::RIGHT_CENTER, &text, theme::medium(11.0), theme::DIM);
-                let width = kit::text_width(ui, &text, theme::medium(11.0));
-                let icon = if battery.charging { icons::BATTERY_CHARGING } else { battery_icon(battery.percent) };
-                let color = if battery.charging { theme::GREEN } else { theme::DIM };
-                ui.painter().text(pos2(right - width - 4.0, y), Align2::RIGHT_CENTER, icon, theme::icon(15.0), color);
+                paint_battery(ui, gear.left() - 6.0, y, battery.percent, battery.charging);
             }
         }
     }
 
     fn paint_expanded(&mut self, ui: &mut Ui, rect: Rect, settings: &Settings, frame: &eframe::Frame) {
         self.paint_nav(ui, rect, settings);
-        let body = Rect::from_min_max(pos2(rect.left() + 16.0, rect.top() + NAV_H + 8.0), pos2(rect.right() - 16.0, rect.bottom() - 12.0));
+        let [left, top, right, bottom] = content_margins(self.view);
+        let body = Rect::from_min_max(pos2(rect.left() + left, rect.top() + top), pos2(rect.right() - right, rect.bottom() - bottom));
         let mut child = ui.new_child(UiBuilder::new().max_rect(body).id_salt(self.view));
         child.set_clip_rect(rect);
         child.multiply_opacity(self.view_alpha);
         match self.view {
             View::Media => self.media_view(&mut child, body, settings),
             View::Shelf => self.shelf_view(&mut child, body, settings, frame),
-            View::Controls => self.controls_view(&mut child, body, settings),
+            View::Controls | View::Legion => self.controls_view(&mut child, body, settings),
             View::Claude => self.claude_view(&mut child, body, settings),
             View::Weather => self.weather_view(&mut child, body, settings),
-            View::Legion => self.legion_view(&mut child, body),
             View::Mixer => self.mixer_view(&mut child, body),
             View::Camera => self.camera_view(&mut child, body, settings),
         }
+    }
+}
+
+/// Space between the notch's edges and a tab's content (left, top, right, bottom), from the margins
+/// of each content grid in the original's MainWindow.xaml.
+fn content_margins(view: View) -> [f32; 4] {
+    match view {
+        // The media tab places everything itself, measured from the notch's corner.
+        View::Media => [0.0, 0.0, 0.0, 0.0],
+        View::Camera => [16.0, 36.0, 16.0, 16.0],
+        View::Claude | View::Controls | View::Legion | View::Weather => [20.0, 34.0, 20.0, 14.0],
+        _ => [16.0, NAV_H + 8.0, 16.0, 12.0],
     }
 }
 
@@ -1148,6 +1159,31 @@ fn toast_size(toast: &Toast, base_w: f32, base_h: f32) -> (f32, f32) {
         Toast::Hello => (300.0, tall),
         _ => (380.0, tall),
     }
+}
+
+/// The original's battery: percentage in bold, a 27 × 14.4 outlined body filled white to the
+/// charge, a small tip, and a lightning bolt over it while charging. `right` is the tip's right edge.
+fn paint_battery(ui: &Ui, right: f32, y: f32, percent: f32, charging: bool) {
+    let painter = ui.painter();
+    let outline = Color32::from_gray(0x66);
+    let tip = Rect::from_min_size(pos2(right - 2.71, y - 3.61), vec2(2.71, 7.22));
+    painter.rect_filled(tip, CornerRadius { nw: 0, sw: 0, ne: 2, se: 2 }, outline);
+    let body = Rect::from_min_size(pos2(tip.left() - 27.08, y - 7.22), vec2(27.08, 14.44));
+    let inner = body.shrink2(vec2(1.36 + 0.78, 1.36 + 1.08));
+    let level = (percent / 100.0).clamp(0.0, 1.0);
+    if level > 0.0 {
+        let fill = Rect::from_min_size(inner.min, vec2((inner.width() * level).max(2.0), inner.height()));
+        painter.rect_filled(fill, kit::rounded(2.71), Color32::WHITE);
+    }
+    painter.rect_stroke(body, kit::rounded(4.07), Stroke::new(1.36, outline), egui::StrokeKind::Inside);
+    if charging {
+        // A dark outline keeps the bolt readable over the white fill.
+        let center = body.center() + vec2(1.0, 0.0);
+        glyph::paint(painter, center, 18.5, glyph::BOLT, theme::alpha(Color32::BLACK, 0.85));
+        glyph::paint(painter, center, 15.0, glyph::BOLT, Color32::WHITE);
+    }
+    let text = format!("{percent:.0}%");
+    painter.text(pos2(body.left() - 4.51, y + 0.5), Align2::RIGHT_CENTER, text, theme::bold(12.0), theme::alpha(Color32::WHITE, 0.8));
 }
 
 fn ear_shape(ui: &Ui, corner: Pos2, size: f32, side: f32, fill: Color32) {

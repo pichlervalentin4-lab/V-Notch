@@ -152,7 +152,7 @@ impl Default for Settings {
             enable_glow_on_hover: true,
             enable_blur_effects: true,
             show_media_art_background: true,
-            media_blur_dark_overlay: 0.35,
+            media_blur_dark_overlay: 0.0,
             slim_idle_notch: true,
             clock_page_style: "analog".into(),
             enable_glass_style: false,

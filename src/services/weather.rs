@@ -43,10 +43,14 @@ pub struct Forecast {
     pub humidity: f32,
     pub wind: f32,
     pub gusts: f32,
+    /// Where the wind comes from, in degrees (0 = north), for the wind tile's dial.
+    pub wind_direction: f32,
     pub code: i32,
     pub is_day: bool,
     pub hours: Vec<HourForecast>,
     pub days: Vec<DayForecast>,
+    /// Local time of the download, "HH:MM", shown as "Updated …".
+    pub fetched_at: String,
 }
 
 pub fn geocode(city: &str) -> Result<Place, String> {
@@ -80,7 +84,7 @@ pub fn fetch(place: &Place, fahrenheit: bool) -> Result<Forecast, String> {
     let unit = if fahrenheit { "&temperature_unit=fahrenheit" } else { "" };
     let url = format!(
         "https://api.open-meteo.com/v1/forecast?latitude={:.4}&longitude={:.4}\
-         &current=temperature_2m,apparent_temperature,relative_humidity_2m,is_day,weather_code,wind_speed_10m,wind_gusts_10m\
+         &current=temperature_2m,apparent_temperature,relative_humidity_2m,is_day,weather_code,wind_speed_10m,wind_gusts_10m,wind_direction_10m\
          &hourly=temperature_2m,precipitation_probability,precipitation,weather_code,is_day\
          &daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,uv_index_max,sunrise,sunset\
          &timezone=auto&forecast_days=7{unit}",
@@ -145,10 +149,12 @@ pub fn parse_forecast(root: &Value, place: &str) -> Result<Forecast, String> {
         humidity: read("relative_humidity_2m"),
         wind: read("wind_speed_10m"),
         gusts: read("wind_gusts_10m"),
+        wind_direction: read("wind_direction_10m"),
         code: current["weather_code"].as_i64().unwrap_or(0) as i32,
         is_day: current["is_day"].as_i64().unwrap_or(1) == 1,
         hours,
         days,
+        fetched_at: chrono::Local::now().format("%H:%M").to_string(),
     })
 }
 

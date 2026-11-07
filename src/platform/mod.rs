@@ -217,6 +217,20 @@ pub fn system_commands() -> Vec<SystemCommand> {
     ]
 }
 
+/// Opens the system's network settings, as the original's network tile and boxes do.
+pub fn open_network_settings() {
+    #[cfg(windows)]
+    let _ = open::that_detached("ms-settings:network-status");
+    #[cfg(target_os = "macos")]
+    let _ = open::that_detached("x-apple.systempreferences:com.apple.Network-Settings.extension");
+    #[cfg(target_os = "linux")]
+    {
+        if !spawn_detached("gnome-control-center", &["network"]) {
+            spawn_detached("nm-connection-editor", &[]);
+        }
+    }
+}
+
 /// Runs a command and waits for it, returning its stdout; `None` when it could not run or failed.
 pub(crate) fn capture(program: &str, args: &[&str]) -> Option<String> {
     let mut command = std::process::Command::new(program);

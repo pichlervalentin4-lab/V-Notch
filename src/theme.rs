@@ -31,6 +31,12 @@ pub fn regular(size: f32) -> FontId {
     FontId::proportional(size)
 }
 
+/// The light face for big figures (the weather's temperature): Segoe UI Light where Windows has it,
+/// as in the original, Inter elsewhere.
+pub fn thin(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name("thin".into()))
+}
+
 pub fn icon(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("ph".into()))
 }
@@ -109,6 +115,14 @@ pub fn install_fonts(ctx: &egui::Context) {
     fonts.families.insert(FontFamily::Name("medium".into()), chain("inter-medium"));
     fonts.families.insert(FontFamily::Name("semibold".into()), chain("inter-semibold"));
     fonts.families.insert(FontFamily::Name("bold".into()), chain("inter-bold"));
+    // Read from the system, never shipped: Segoe UI belongs to Windows.
+    let thin = if cfg!(windows) && let Ok(bytes) = std::fs::read("C:\\Windows\\Fonts\\segoeuil.ttf") {
+        fonts.font_data.insert("segoe-light".to_owned(), Arc::new(FontData::from_owned(bytes)));
+        "segoe-light"
+    } else {
+        "inter"
+    };
+    fonts.families.insert(FontFamily::Name("thin".into()), chain(thin));
     fonts.families.insert(FontFamily::Name("ph".into()), vec!["ph".to_owned()]);
     fonts.families.insert(FontFamily::Name("ph-fill".into()), vec!["ph-fill".to_owned()]);
     ctx.set_fonts(fonts);

@@ -219,6 +219,10 @@ impl eframe::App for VNotchApp {
     /// Test runs click without touching the real mouse: press in one frame, release in the next.
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        if self.options.screenshot.is_some() {
+            // A picture shows the tab as it is, not tooltips or hover marks of wherever the real mouse is.
+            raw_input.events.retain(|event| !matches!(event, egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. }));
+        }
         if let Some(pos) = self.pressed_at.take() {
             raw_input.events.push(button(pos, false));
             return;

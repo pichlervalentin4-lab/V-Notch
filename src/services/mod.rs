@@ -10,8 +10,12 @@ pub mod legion;
 pub mod lyrics;
 pub mod media;
 pub mod shelf;
+// The original's control center took over the controls tab and hides the focus timer and the
+// ambient sounds; both services stay, unused by the UI for now, so they can come back.
+#[allow(dead_code)]
 pub mod sounds;
 pub mod system;
+#[allow(dead_code)]
 pub mod timer;
 pub mod tray;
 pub mod updates;

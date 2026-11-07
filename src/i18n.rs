@@ -91,11 +91,24 @@ fn current() -> &'static RwLock<Arc<Table>> {
     CURRENT.get_or_init(|| RwLock::new(Arc::new(build("de"))))
 }
 
+fn current_language() -> &'static RwLock<String> {
+    static LANGUAGE: OnceLock<RwLock<String>> = OnceLock::new();
+    LANGUAGE.get_or_init(|| RwLock::new("de".to_owned()))
+}
+
 pub fn set_language(lang: &str) {
     let table = Arc::new(build(lang));
     if let Ok(mut guard) = current().write() {
         *guard = table;
     }
+    if let Ok(mut guard) = current_language().write() {
+        *guard = lang.to_owned();
+    }
+}
+
+/// The language code the strings come from, for the few things formatted by hand (month names).
+pub fn language() -> String {
+    current_language().read().map(|lang| lang.clone()).unwrap_or_else(|_| "en".to_owned())
 }
 
 /// The string for `key`, or the key itself so a missing string stays visible.
