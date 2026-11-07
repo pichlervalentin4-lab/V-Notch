@@ -35,15 +35,16 @@ fn parse_args() -> Result<Options, String> {
             "--query" => options.query = Some(value("--query")?),
             "--stats" => options.stats = true,
             "--profile" => options.profile = Some(PathBuf::from(value("--profile")?)),
-            "--click" => {
+            "--click" | "--move" => {
                 // "x,y@seconds", in points of the main window.
-                let text = value("--click")?;
-                let parse = || -> Option<(f32, eframe::egui::Pos2)> {
+                let click = arg == "--click";
+                let text = value(&arg)?;
+                let parse = || -> Option<(f32, eframe::egui::Pos2, bool)> {
                     let (position, at) = text.split_once('@')?;
                     let (x, y) = position.split_once(',')?;
-                    Some((at.trim().parse().ok()?, eframe::egui::pos2(x.trim().parse().ok()?, y.trim().parse().ok()?)))
+                    Some((at.trim().parse().ok()?, eframe::egui::pos2(x.trim().parse().ok()?, y.trim().parse().ok()?), click))
                 };
-                options.clicks.push(parse().ok_or("--click needs x,y@seconds")?);
+                options.clicks.push(parse().ok_or(format!("{arg} needs x,y@seconds"))?);
             }
             "--settings" => options.settings_section = Some(value("--settings")?),
             "--island" => options.island = true,

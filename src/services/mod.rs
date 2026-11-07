@@ -76,7 +76,7 @@ impl Hub {
             }
         }
         let hub = Self {
-            media: media::MediaService::start(ctx.clone(), settings.clone(), toasts.clone(), demo),
+            media: media::MediaService::start(ctx.clone(), settings.clone(), demo),
             audio: audio::AudioService::start(ctx.clone(), toasts.clone(), demo),
             system: system::SystemService::start(ctx.clone(), settings.clone(), toasts.clone(), demo),
             weather: weather_service::WeatherService::start(ctx.clone(), settings.clone(), demo),

@@ -261,7 +261,6 @@ impl SettingsWindow {
 
         section_gap(ui);
         heading(ui, &t("port.settings.notifications"));
-        toggle_row(ui, &t("settings.musicNotify"), &mut s.show_music_notifications);
         toggle_row(ui, &t("settings.systemNotify"), &mut s.show_system_notifications);
         toggle_row(ui, &t("settings.showBattery"), &mut s.show_battery_indicator);
         toggle_row(ui, &t("settings.interactionSounds"), &mut s.enable_interaction_sounds);

@@ -107,14 +107,12 @@ unsafe extern "system" fn whole_client_area(hwnd: HWND, message: u32, wparam: WP
 /// window, far larger than what is drawn in it.
 fn remove_frame(hwnd: HWND) {
     use windows::Win32::Graphics::Dwm::{
-        DWMNCRP_DISABLED, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_NCRENDERING_POLICY, DWMWA_WINDOW_CORNER_PREFERENCE,
-        DWMWCP_DONOTROUND, DwmSetWindowAttribute,
+        DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DwmSetWindowAttribute,
     };
+    // Do not turn DWM's non-client rendering off (DWMWA_NCRENDERING_POLICY): Windows then paints
+    // the old light-blue frame for a moment whenever the window styles change, e.g. on every
+    // click-through switch. The drop shadow is removed where the client area is set up instead.
     unsafe {
-        // No non-client rendering at all: that is where the drop shadow comes from, which egui
-        // requests for every undecorated window and which outlines the whole transparent window.
-        let policy = DWMNCRP_DISABLED;
-        let _ = DwmSetWindowAttribute(hwnd, DWMWA_NCRENDERING_POLICY, (&raw const policy).cast(), std::mem::size_of_val(&policy) as u32);
         // Border and corners are Windows 11 only and fail harmlessly on Windows 10.
         let none = DWMWA_COLOR_NONE;
         let _ = DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, (&raw const none).cast(), std::mem::size_of_val(&none) as u32);

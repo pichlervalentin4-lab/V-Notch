@@ -2,11 +2,10 @@
 
 use super::artwork::{self, Artwork};
 use super::lyrics::{self, Lyrics};
-use super::{Shared, Toast, push_toast};
 use crate::platform::{MediaBackend, MediaCommand, MediaInfo};
 use crate::settings::SharedSettings;
 use eframe::egui;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -36,7 +35,7 @@ pub struct MediaService {
 }
 
 impl MediaService {
-    pub fn start(ctx: egui::Context, settings: SharedSettings, toasts: Shared<VecDeque<Toast>>, demo: bool) -> Arc<Self> {
+    pub fn start(ctx: egui::Context, settings: SharedSettings, demo: bool) -> Arc<Self> {
         let (sender, receiver) = mpsc::channel();
         let service = Arc::new(Self { state: Mutex::new(MediaState::default()), commands: Mutex::new(sender) });
         if demo {
@@ -62,7 +61,7 @@ impl MediaService {
                 if info.is_some() {
                     last_seen = Instant::now();
                 }
-                worker.apply(info, last_seen, &ctx, &settings, &toasts, &mut cache);
+                worker.apply(info, last_seen, &ctx, &settings, &mut cache);
             }
         });
         service
@@ -74,7 +73,6 @@ impl MediaService {
         last_seen: Instant,
         ctx: &egui::Context,
         settings: &SharedSettings,
-        toasts: &Shared<VecDeque<Toast>>,
         cache: &mut HashMap<String, Arc<Lyrics>>,
     ) {
         let Ok(mut state) = self.state.lock() else { return };
@@ -97,9 +95,8 @@ impl MediaService {
 
         if new_track {
             state.lyrics = LyricsState::None;
-            if settings.read(|s| s.show_music_notifications) && info.playing {
-                push_toast(toasts, Toast::Music { title: info.title.clone(), artist: info.artist.clone() });
-            }
+            // Like the original, a new track shows up in the collapsed notch without a pop-up:
+            // browser media (TikTok, YouTube Shorts) changes "track" every few seconds.
             let wanted = settings.read(|s| s.enable_online_lyrics && s.is_online_allowed());
             if wanted && !info.duration.is_zero() {
                 let key = format!("{}|{}", info.title, info.artist);

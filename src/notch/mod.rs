@@ -254,6 +254,8 @@ pub struct Notch {
     passthrough: Option<bool>,
     /// Why the last frame asked for the next one; counted by `--stats`.
     pub repaint_reason: &'static str,
+    /// Test runs drive the pointer themselves; clicks of the real mouse elsewhere must not close them.
+    pub ignore_real_clicks: bool,
     prepared: bool,
     placed_on: Option<usize>,
     window_origin: Pos2,
@@ -300,6 +302,7 @@ impl Notch {
             cursor,
             passthrough: None,
             repaint_reason: "start",
+            ignore_real_clicks: false,
             prepared: false,
             placed_on: None,
             window_origin: Pos2::ZERO,
@@ -516,7 +519,7 @@ impl Notch {
 
         let inside = self.cursor.inside.load(Ordering::Relaxed);
         self.handle_hover(inside, &settings, now);
-        if self.cursor.clicked_outside.swap(false, Ordering::Relaxed) && self.expanded && settings.disable_mouse_leave_auto_close {
+        if self.cursor.clicked_outside.swap(false, Ordering::Relaxed) && self.expanded && settings.disable_mouse_leave_auto_close && !self.ignore_real_clicks {
             self.close();
         }
 

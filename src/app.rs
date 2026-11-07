@@ -28,8 +28,8 @@ pub struct Options {
     pub query: Option<String>,
     pub stats: bool,
     pub profile: Option<PathBuf>,
-    /// Clicks for test runs: (seconds after start, position in points).
-    pub clicks: Vec<(f32, egui::Pos2)>,
+    /// Pointer input for test runs: (seconds after start, position in points, click or just move).
+    pub clicks: Vec<(f32, egui::Pos2, bool)>,
     pub screenshot: Option<PathBuf>,
     pub exit_after: Option<f32>,
     pub language: Option<String>,
@@ -79,6 +79,7 @@ impl VNotchApp {
             }
             notch.open(view);
         }
+        notch.ignore_real_clicks = options.screenshot.is_some() || !options.clicks.is_empty();
         if options.spotlight || options.spotlight_ai {
             spotlight.keep_open = true;
             if options.spotlight_ai {
@@ -223,13 +224,15 @@ impl eframe::App for VNotchApp {
             return;
         }
         let elapsed = self.started.elapsed().as_secs_f32();
-        if let Some(&(at, pos)) = self.options.clicks.get(self.next_click)
+        if let Some(&(at, pos, click)) = self.options.clicks.get(self.next_click)
             && elapsed >= at
         {
             self.next_click += 1;
             raw_input.events.push(egui::Event::PointerMoved(pos));
-            raw_input.events.push(button(pos, true));
-            self.pressed_at = Some(pos);
+            if click {
+                raw_input.events.push(button(pos, true));
+                self.pressed_at = Some(pos);
+            }
         }
     }
 
