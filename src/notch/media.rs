@@ -266,8 +266,8 @@ pub fn word_clock(hour: u32, minute: u32) -> String {
     let name = |h: u32| HOURS[(h % 12) as usize];
     let text = match rounded {
         0 | 60 => {
-            let h = hour + u32::from(rounded == 60);
-            let spoken = if h % 12 == 1 { "ein" } else { name(h) };
+            // A rounded 60 already moved `hour` on above.
+            let spoken = if hour % 12 == 1 { "ein" } else { name(hour) };
             format!("{spoken} Uhr")
         }
         5 => format!("fünf nach {}", name(hour)),

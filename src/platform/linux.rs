@@ -150,12 +150,15 @@ impl MediaBackend {
         let artist = meta_string_list(&metadata, "xesam:artist").unwrap_or_default();
         let album = meta_string(&metadata, "xesam:album").unwrap_or_default();
         let art_url = meta_string(&metadata, "mpris:artUrl").unwrap_or_default();
+        // Read before art_for: the proxy borrows the bus and art_for needs &mut self.
+        let can_seek = proxy.get_property::<bool>("CanSeek").unwrap_or(false);
 
         let identity = Proxy::new(self.bus.as_ref()?, name.clone(), MPRIS_PATH, MPRIS_ROOT)
             .ok()
             .and_then(|root| root.get_property::<String>("Identity").ok())
             .unwrap_or_else(|| name.trim_start_matches("org.mpris.MediaPlayer2.").to_string());
 
+        drop(proxy);
         let (art, art_key) = self.art_for(&art_url);
         Some(MediaInfo {
             title,
@@ -168,7 +171,7 @@ impl MediaBackend {
             position_read_at: Instant::now(),
             art,
             art_key,
-            can_seek: proxy.get_property::<bool>("CanSeek").unwrap_or(false),
+            can_seek,
         })
     }
 

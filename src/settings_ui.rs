@@ -84,8 +84,10 @@ impl SettingsWindow {
         self.open = true;
     }
 
-    pub fn viewport_id(&self) -> ViewportId {
-        self.viewport_id
+    /// Draws the window into a ui of the caller. Picture runs use this, because egui
+    /// cannot capture an immediate viewport.
+    pub fn draw_embedded(&mut self, ui: &mut Ui) {
+        self.window(ui);
     }
 
     pub fn show_viewport(&mut self, ctx: &egui::Context) {

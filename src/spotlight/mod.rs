@@ -122,16 +122,37 @@ impl Spotlight {
         }
     }
 
-    /// Call every frame from the main viewport. Draws the window while it is open.
-    pub fn show_viewport(&mut self, ctx: &egui::Context, screen_center_x: f32, top: f32) {
-        if !self.open {
-            return;
-        }
+    /// Puts text into the search box, as if it had been typed.
+    pub fn set_query(&mut self, query: &str) {
+        self.query = query.to_string();
+    }
+
+    fn refresh_results(&mut self) {
         if self.mode == Mode::Search && self.last_query.as_deref() != Some(self.query.as_str()) {
             self.results = self.searcher.search(&self.query, MAX_RESULTS);
             self.last_query = Some(self.query.clone());
             self.selected = 0;
         }
+    }
+
+    /// Size of the window including its shadow margin.
+    pub fn outer_size(&self) -> egui::Vec2 {
+        vec2(WIDTH + MARGIN * 2.0, self.height() + MARGIN * 2.0)
+    }
+
+    /// Draws the window into a ui of the caller. Picture runs use this, because egui
+    /// cannot capture an immediate viewport.
+    pub fn draw_embedded(&mut self, ui: &mut Ui) {
+        self.refresh_results();
+        self.window(ui);
+    }
+
+    /// Call every frame from the main viewport. Draws the window while it is open.
+    pub fn show_viewport(&mut self, ctx: &egui::Context, screen_center_x: f32, top: f32) {
+        if !self.open {
+            return;
+        }
+        self.refresh_results();
         let height = self.height() + MARGIN * 2.0;
         let width = WIDTH + MARGIN * 2.0;
         let builder = ViewportBuilder::default()

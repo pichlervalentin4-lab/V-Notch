@@ -25,7 +25,7 @@ pub struct Options {
     pub settings_section: Option<String>,
     pub island: bool,
     pub toast: Option<String>,
-    pub collapsed_media: bool,
+    pub query: Option<String>,
     pub screenshot: Option<PathBuf>,
     pub exit_after: Option<f32>,
     pub language: Option<String>,
@@ -43,6 +43,7 @@ pub struct VNotchApp {
     started: Instant,
     level_on_bottom: Option<bool>,
     update_checked: bool,
+    screenshot_requested: bool,
 }
 
 impl VNotchApp {
@@ -62,8 +63,11 @@ impl VNotchApp {
             hub.toast(Toast::Hello);
         }
 
-        // A test run opens exactly what it wants to look at.
+        // A test run opens exactly what it wants to look at, and keeps it open while the pointer is elsewhere.
         if let Some(view) = options.view.as_deref().and_then(View::from_token) {
+            if options.demo {
+                settings.update(|s| s.disable_mouse_leave_auto_close = true);
+            }
             notch.open(view);
         }
         if options.spotlight || options.spotlight_ai {
@@ -81,6 +85,9 @@ impl VNotchApp {
         if let Some(toast) = options.toast.as_deref() {
             hub.toast(demo_toast(toast));
         }
+        if let Some(query) = options.query.as_deref() {
+            spotlight.set_query(query);
+        }
         Self {
             hub,
             notch,
@@ -93,6 +100,7 @@ impl VNotchApp {
             started: Instant::now(),
             level_on_bottom: None,
             update_checked: false,
+            screenshot_requested: false,
         }
     }
 
@@ -132,9 +140,30 @@ impl VNotchApp {
         }
     }
 
-    /// Ends a test run after the requested time. TODO: rebuild `--screenshot` on egui 0.37's `Context::request_screenshot`.
-    fn drive_test_run(&mut self) {
-        if self.options.exit_after.is_some_and(|limit| self.started.elapsed().as_secs_f32() > limit) {
+    /// Ends a test run after the requested time, or saves a picture of the window it opened and quits.
+    fn drive_test_run(&mut self, ctx: &egui::Context) {
+        let elapsed = self.started.elapsed().as_secs_f32();
+        if let Some(path) = self.options.screenshot.clone() {
+            // Spring animations and the first service results need a moment to settle.
+            let shoot_at = self.options.exit_after.unwrap_or(2.5);
+            if !self.screenshot_requested && elapsed > shoot_at {
+                self.screenshot_requested = true;
+                let callback = egui::ScreenshotCallback::new(move |image| {
+                    let code = match save_png(&image, &path) {
+                        Ok(()) => 0,
+                        Err(error) => {
+                            eprintln!("screenshot failed: {error}");
+                            1
+                        }
+                    };
+                    std::process::exit(code);
+                });
+                ctx.send_viewport_cmd(ViewportCommand::Screenshot(callback));
+            }
+            ctx.request_repaint();
+            return;
+        }
+        if self.options.exit_after.is_some_and(|limit| elapsed > limit) {
             std::process::exit(0);
         }
     }
@@ -151,6 +180,18 @@ impl eframe::App for VNotchApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        if self.options.screenshot.is_some() && (self.options.spotlight || self.options.spotlight_ai || self.options.settings_section.is_some()) {
+            // egui cannot capture an immediate viewport, so a picture run draws that window in the main one.
+            let size = if self.options.settings_section.is_some() { egui::vec2(820.0, 600.0) } else { self.spotlight.outer_size() };
+            ctx.send_viewport_cmd(ViewportCommand::InnerSize(size));
+            if self.options.settings_section.is_some() {
+                self.settings_window.draw_embedded(ui);
+            } else {
+                self.spotlight.draw_embedded(ui);
+            }
+            self.drive_test_run(&ctx);
+            return;
+        }
         self.handle_shortcuts();
         self.handle_tray(&ctx);
 
@@ -188,8 +229,15 @@ impl eframe::App for VNotchApp {
         self.translator.show_viewport(&ctx, center_x, top);
         self.settings_window.show_viewport(&ctx);
 
-        self.drive_test_run();
+        self.drive_test_run(&ctx);
     }
+}
+
+fn save_png(image: &egui::ColorImage, path: &std::path::Path) -> Result<(), String> {
+    let [width, height] = image.size;
+    let bytes: Vec<u8> = image.pixels.iter().flat_map(|pixel| pixel.to_srgba_unmultiplied()).collect();
+    let buffer = image::RgbaImage::from_raw(width as u32, height as u32, bytes).ok_or("bad image size")?;
+    buffer.save(path).map_err(|error| error.to_string())
 }
 
 fn section_from_name(name: &str) -> Section {

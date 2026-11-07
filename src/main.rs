@@ -32,6 +32,7 @@ fn parse_args() -> Result<Options, String> {
             "--view" => options.view = Some(value("--view")?),
             "--spotlight" => options.spotlight = true,
             "--spotlight-ai" => options.spotlight_ai = true,
+            "--query" => options.query = Some(value("--query")?),
             "--settings" => options.settings_section = Some(value("--settings")?),
             "--island" => options.island = true,
             "--toast" => options.toast = Some(value("--toast")?),
