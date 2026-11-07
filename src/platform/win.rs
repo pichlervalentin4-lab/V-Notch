@@ -167,6 +167,11 @@ pub fn idle_seconds() -> f32 {
 }
 
 fn process_name(pid: u32) -> Option<String> {
+    let path = process_path(pid)?;
+    Path::new(&path).file_stem().map(|s| s.to_string_lossy().into_owned())
+}
+
+fn process_path(pid: u32) -> Option<String> {
     unsafe {
         let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
         let mut buffer = [0u16; 1024];
@@ -174,10 +179,62 @@ fn process_name(pid: u32) -> Option<String> {
         let result = QueryFullProcessImageNameW(process, PROCESS_NAME_FORMAT(0), PWSTR(buffer.as_mut_ptr()), &mut size);
         let _ = CloseHandle(process);
         result.ok()?;
-        let path = String::from_utf16_lossy(&buffer[..size as usize]);
-        Path::new(&path).file_stem().map(|s| s.to_string_lossy().into_owned())
+        Some(String::from_utf16_lossy(&buffer[..size as usize]))
     }
 }
+
+/// (lower-case exe file name, process id) of every process. Cheap: no process is opened.
+fn process_list() -> Vec<(String, u32)> {
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+    };
+    let mut list = Vec::new();
+    unsafe {
+        let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return list };
+        let mut entry = PROCESSENTRY32W { dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
+        let mut more = Process32FirstW(snapshot, &mut entry).is_ok();
+        while more {
+            let length = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
+            list.push((String::from_utf16_lossy(&entry.szExeFile[..length]).to_lowercase(), entry.th32ProcessID));
+            more = Process32NextW(snapshot, &mut entry).is_ok();
+        }
+        let _ = CloseHandle(snapshot);
+    }
+    list
+}
+
+/// Whether the app behind a consent-store key still runs. A crashed app leaves "in use" behind
+/// for good, so the registry alone would show the microphone as busy forever.
+/// `path_of` reads a process's image path; it is only called where the exe name could match.
+fn consent_owner_running(key: &str, packaged: bool, processes: &[(String, u32)], path_of: impl Fn(u32) -> Option<String>) -> bool {
+    let key = key.to_lowercase();
+    if packaged {
+        // "Vendor.App_publisherid" runs from "...\WindowsApps\Vendor.App_1.2.3.0_x64__publisherid\..."
+        // or, for system apps, from "...\SystemApps\Vendor.App_publisherid\...". The exe name says
+        // nothing about the package, so every process has to be asked.
+        let (name, publisher) = key.rsplit_once('_').unwrap_or((key.as_str(), ""));
+        let folder = format!("\\{name}_");
+        processes.iter().any(|&(_, pid)| {
+            path_of(pid).is_some_and(|path| {
+                let path = path.to_lowercase();
+                path.contains(&folder) && path.contains(publisher)
+            })
+        })
+    } else {
+        // "C:#Program Files#App#app.exe" is the full path with '#' for '\'.
+        let path = key.replace('#', "\\");
+        let exe = path.rsplit('\\').next().unwrap_or(&path);
+        processes
+            .iter()
+            .filter(|(name, _)| name == exe)
+            .any(|&(_, pid)| path_of(pid).is_some_and(|running| running.to_lowercase() == path))
+    }
+}
+
+/// Verdicts per (consent key, start time). A process that is gone never comes back with the same
+/// start time, so "not running" is final; "running" is checked again now and then to notice a crash.
+static CONSENT_VERDICTS: std::sync::Mutex<Vec<(String, u64, bool, std::time::Instant)>> = std::sync::Mutex::new(Vec::new());
+const RUNNING_RECHECK: std::time::Duration = std::time::Duration::from_secs(10);
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Media
@@ -325,8 +382,21 @@ unsafe trait IPolicyConfig: windows::core::IUnknown {
 
 const POLICY_CONFIG_CLIENT: GUID = GUID::from_u128(0x870af99c_171d_4f9e_af0d_e63df40c2bc9);
 
+/// The default output's volume and meter controls.
+#[derive(Clone)]
+struct RenderControls {
+    volume: IAudioEndpointVolume,
+    meter: IAudioMeterInformation,
+    found: std::time::Instant,
+}
+
+/// How long the output controls are reused. Looking them up is a call into the audio service,
+/// too slow to repeat on every poll; a switch of the default device shows up after this at most.
+const RENDER_KEEP: std::time::Duration = std::time::Duration::from_secs(3);
+
 pub struct AudioBackend {
     enumerator: Option<IMMDeviceEnumerator>,
+    render: std::cell::RefCell<Option<RenderControls>>,
 }
 
 impl AudioBackend {
@@ -334,7 +404,7 @@ impl AudioBackend {
     pub fn new() -> Self {
         unsafe {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-            Self { enumerator: CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).ok() }
+            Self { enumerator: CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).ok(), render: std::cell::RefCell::new(None) }
         }
     }
 
@@ -343,7 +413,34 @@ impl AudioBackend {
     }
 
     fn endpoint_volume(&self, flow: EDataFlow) -> Option<IAudioEndpointVolume> {
+        if flow == eRender {
+            return self.render_controls().map(|controls| controls.volume);
+        }
         unsafe { self.endpoint(flow)?.Activate(CLSCTX_ALL, None).ok() }
+    }
+
+    fn render_controls(&self) -> Option<RenderControls> {
+        let mut cached = self.render.borrow_mut();
+        if let Some(controls) = cached.as_ref()
+            && controls.found.elapsed() < RENDER_KEEP
+        {
+            return Some(controls.clone());
+        }
+        let device = self.endpoint(eRender)?;
+        let controls = unsafe {
+            RenderControls {
+                volume: device.Activate(CLSCTX_ALL, None).ok()?,
+                meter: device.Activate(CLSCTX_ALL, None).ok()?,
+                found: std::time::Instant::now(),
+            }
+        };
+        *cached = Some(controls.clone());
+        Some(controls)
+    }
+
+    /// Looks the output up again on the next call, after the default device was changed here.
+    fn forget_render(&self) {
+        self.render.borrow_mut().take();
     }
 
     pub fn master(&self) -> Option<VolumeInfo> {
@@ -373,13 +470,8 @@ impl AudioBackend {
     }
 
     pub fn master_peak(&self) -> f32 {
-        let Some(device) = self.endpoint(eRender) else { return 0.0 };
-        unsafe {
-            device
-                .Activate::<IAudioMeterInformation>(CLSCTX_ALL, None)
-                .and_then(|meter| meter.GetPeakValue())
-                .unwrap_or(0.0)
-        }
+        let Some(controls) = self.render_controls() else { return 0.0 };
+        unsafe { controls.meter.GetPeakValue().unwrap_or(0.0) }
     }
 
     pub fn mic(&self) -> Option<VolumeInfo> {
@@ -518,6 +610,7 @@ impl AudioBackend {
                 let _ = policy.set_default_endpoint(PCWSTR(id.as_ptr()), role);
             }
         }
+        self.forget_render();
     }
 }
 
@@ -595,17 +688,19 @@ impl Drop for RegKey {
     }
 }
 
-/// An app counts as using a capability when its last use has a start but no stop time yet.
+/// An app counts as using a capability when its last use has a start but no stop time yet
+/// and the app is still running.
 fn apps_using(capability: &str) -> Vec<String> {
-    let mut apps = Vec::new();
     let root = format!("{CONSENT_STORE}{capability}");
-    let Some(store) = RegKey::open(HKEY_CURRENT_USER, &root, KEY_READ) else { return apps };
-    let mut visit = |key_path: String, name: &str| {
+    let Some(store) = RegKey::open(HKEY_CURRENT_USER, &root, KEY_READ) else { return Vec::new() };
+    // Keys the registry marks as in use: (key name, packaged app, start time).
+    let mut candidates: Vec<(String, bool, u64)> = Vec::new();
+    let mut visit = |key_path: String, name: &str, packaged: bool| {
         if let Some(key) = RegKey::open(HKEY_CURRENT_USER, &key_path, KEY_READ)
             && key.read_qword("LastUsedTimeStop") == Some(0)
-            && key.read_qword("LastUsedTimeStart").unwrap_or(0) != 0
+            && let Some(start) = key.read_qword("LastUsedTimeStart").filter(|&start| start != 0)
         {
-            apps.push(consent_key_name(name));
+            candidates.push((name.to_string(), packaged, start));
         }
     };
     for name in store.subkeys() {
@@ -613,11 +708,39 @@ fn apps_using(capability: &str) -> Vec<String> {
             let parent = format!("{root}\\NonPackaged");
             if let Some(non_packaged) = RegKey::open(HKEY_CURRENT_USER, &parent, KEY_READ) {
                 for app in non_packaged.subkeys() {
-                    visit(format!("{parent}\\{app}"), &app);
+                    visit(format!("{parent}\\{app}"), &app, false);
                 }
             }
         } else {
-            visit(format!("{root}\\{name}"), &name);
+            visit(format!("{root}\\{name}"), &name, true);
+        }
+    }
+    let Ok(mut verdicts) = CONSENT_VERDICTS.lock() else { return Vec::new() };
+    // Forget verdicts for keys of this capability that are no longer marked as in use.
+    let prefix = format!("{capability}/");
+    verdicts.retain(|(id, start, ..)| {
+        !id.starts_with(&prefix) || candidates.iter().any(|(name, _, s)| *id == format!("{prefix}{name}") && s == start)
+    });
+    let mut processes: Option<Vec<(String, u32)>> = None;
+    let mut apps = Vec::new();
+    for (name, packaged, start) in &candidates {
+        let id = format!("{prefix}{name}");
+        let known = verdicts.iter().position(|(i, s, ..)| *i == id && s == start);
+        let running = match known.map(|index| verdicts[index].clone()) {
+            Some((_, _, false, _)) => false,
+            Some((_, _, true, checked)) if checked.elapsed() < RUNNING_RECHECK => true,
+            _ => {
+                let list = processes.get_or_insert_with(process_list);
+                let running = consent_owner_running(name, *packaged, list, process_path);
+                if let Some(index) = known {
+                    verdicts.remove(index);
+                }
+                verdicts.push((id, *start, running, std::time::Instant::now()));
+                running
+            }
+        };
+        if running {
+            apps.push(consent_key_name(name));
         }
     }
     apps.sort();
@@ -1079,6 +1202,43 @@ fn shell_execute_runas(file: &str, parameters: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn consent_owner_must_still_run() {
+        let processes = vec![("discord.exe".to_string(), 10), ("soundrec.exe".to_string(), 20), ("explorer.exe".to_string(), 30)];
+        let path_of = |pid: u32| match pid {
+            10 => Some(r"C:\Users\me\AppData\Local\Discord\app-1.0.9200\Discord.exe".to_string()),
+            20 => Some(r"C:\Program Files\WindowsApps\Microsoft.WindowsSoundRecorder_11.2.0.0_x64__8wekyb3d8bbwe\SoundRec.exe".to_string()),
+            _ => Some(r"C:\Windows\explorer.exe".to_string()),
+        };
+        // A crashed old Discord version stays "in use" in the registry, but it no longer runs.
+        assert!(!consent_owner_running(r"C:#Users#me#AppData#Local#Discord#app-1.0.9189#Discord.exe", false, &processes, path_of));
+        assert!(consent_owner_running(r"C:#Users#me#AppData#Local#Discord#app-1.0.9200#Discord.exe", false, &processes, path_of));
+        assert!(consent_owner_running("Microsoft.WindowsSoundRecorder_8wekyb3d8bbwe", true, &processes, path_of));
+        assert!(!consent_owner_running("Microsoft.WindowsCamera_8wekyb3d8bbwe", true, &processes, path_of));
+    }
+
+    #[test]
+    fn desktop_apps_only_open_processes_with_the_same_exe_name() {
+        let processes = vec![("discord.exe".to_string(), 10), ("explorer.exe".to_string(), 30)];
+        let opened = std::cell::RefCell::new(Vec::new());
+        let path_of = |pid: u32| {
+            opened.borrow_mut().push(pid);
+            None
+        };
+        consent_owner_running(r"C:#Apps#Discord.exe", false, &processes, path_of);
+        assert_eq!(*opened.borrow(), vec![10]);
+    }
+
+    #[test]
+    fn this_test_shows_up_in_the_process_list() {
+        let me = std::env::current_exe().unwrap();
+        let name = me.file_name().unwrap().to_string_lossy().to_lowercase();
+        let list = process_list();
+        let pid = std::process::id();
+        assert!(list.iter().any(|(n, p)| *n == name && *p == pid));
+        assert_eq!(process_path(pid).map(|p| p.to_lowercase()), Some(me.to_string_lossy().to_lowercase()));
+    }
 
     #[test]
     fn consent_keys_become_readable_names() {

@@ -26,6 +26,7 @@ pub struct Options {
     pub island: bool,
     pub toast: Option<String>,
     pub query: Option<String>,
+    pub stats: bool,
     pub screenshot: Option<PathBuf>,
     pub exit_after: Option<f32>,
     pub language: Option<String>,
@@ -44,6 +45,10 @@ pub struct VNotchApp {
     level_on_bottom: Option<bool>,
     update_checked: bool,
     screenshot_requested: bool,
+    frames: u64,
+    reasons: std::collections::HashMap<&'static str, u64>,
+    last_animation_frame: Option<Instant>,
+    animation_gaps: Vec<f32>,
 }
 
 impl VNotchApp {
@@ -58,7 +63,6 @@ impl VNotchApp {
         let translator = Translator::new(hub.clone());
 
         let (hotkeys, tray) = if options.demo { (None, None) } else { (Some(Hotkeys::new(&ctx)), Tray::start(&ctx)) };
-
         if settings.read(|s| s.enable_hello_greeting) && !options.demo {
             hub.toast(Toast::Hello);
         }
@@ -101,6 +105,10 @@ impl VNotchApp {
             level_on_bottom: None,
             update_checked: false,
             screenshot_requested: false,
+            frames: 0,
+            reasons: std::collections::HashMap::new(),
+            last_animation_frame: None,
+            animation_gaps: Vec::new(),
         }
     }
 
@@ -164,6 +172,28 @@ impl VNotchApp {
             return;
         }
         if self.options.exit_after.is_some_and(|limit| elapsed > limit) {
+            if self.options.stats {
+                let playing = self.hub.media.state.lock().is_ok_and(|s| s.info.as_ref().is_some_and(|i| i.playing));
+                println!("frames {} in {elapsed:.1} s ({:.1} per second), media playing: {playing}", self.frames, self.frames as f32 / elapsed);
+                let mut reasons: Vec<_> = self.reasons.iter().collect();
+                reasons.sort_by(|a, b| b.1.cmp(a.1));
+                for (reason, count) in reasons {
+                    println!("  {count:6}  {reason}");
+                }
+                let mut gaps = self.animation_gaps.clone();
+                if !gaps.is_empty() {
+                    gaps.sort_by(f32::total_cmp);
+                    let pick = |q: f32| gaps[((gaps.len() - 1) as f32 * q) as usize];
+                    let mean = gaps.iter().sum::<f32>() / gaps.len() as f32;
+                    println!(
+                        "animation frame gaps: mean {mean:.1} ms ({:.0} fps), median {:.1}, p95 {:.1}, max {:.1} ms",
+                        1000.0 / mean,
+                        pick(0.5),
+                        pick(0.95),
+                        pick(1.0)
+                    );
+                }
+            }
             std::process::exit(0);
         }
     }
@@ -180,6 +210,7 @@ impl eframe::App for VNotchApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.frames += 1;
         if self.options.screenshot.is_some() && (self.options.spotlight || self.options.spotlight_ai || self.options.settings_section.is_some()) {
             // egui cannot capture an immediate viewport, so a picture run draws that window in the main one.
             let size = if self.options.settings_section.is_some() { egui::vec2(820.0, 600.0) } else { self.spotlight.outer_size() };
@@ -192,8 +223,11 @@ impl eframe::App for VNotchApp {
             self.drive_test_run(&ctx);
             return;
         }
+        let t0 = Instant::now();
         self.handle_shortcuts();
+        let t1 = Instant::now();
         self.handle_tray(&ctx);
+        let t2 = Instant::now();
 
         let settings = self.hub.settings.get();
         if self.level_on_bottom != Some(settings.stay_behind_windows) {
@@ -208,7 +242,33 @@ impl eframe::App for VNotchApp {
             }
         }
 
+        let t3 = Instant::now();
         self.notch.ui(ui, frame);
+        if self.options.stats {
+            let t4 = Instant::now();
+            let ms = |a: Instant, b: Instant| b.duration_since(a).as_secs_f32() * 1000.0;
+            if ms(t0, t4) > 15.0 {
+                println!(
+                    "slow frame at {:.2} s: shortcuts {:.0} ms, tray {:.0} ms, settings {:.0} ms, notch {:.0} ms",
+                    self.started.elapsed().as_secs_f32(),
+                    ms(t0, t1),
+                    ms(t1, t2),
+                    ms(t2, t3),
+                    ms(t3, t4)
+                );
+            }
+            *self.reasons.entry(self.notch.repaint_reason).or_default() += 1;
+            // Gaps between two animation frames show how smooth the movement really is.
+            let now = Instant::now();
+            if let Some(previous) = self.last_animation_frame {
+                let gap = now.duration_since(previous).as_secs_f32() * 1000.0;
+                self.animation_gaps.push(gap);
+                if gap > 30.0 {
+                    println!("hitch of {gap:.0} ms at {:.2} s", self.started.elapsed().as_secs_f32());
+                }
+            }
+            self.last_animation_frame = (self.notch.repaint_reason == "animation").then_some(now);
+        }
 
         if std::mem::take(&mut self.notch.request_settings) {
             self.settings_window.show();

@@ -133,6 +133,8 @@ pub struct CursorShare {
     pub inside: AtomicBool,
     pub clicked_outside: AtomicBool,
     pub running: AtomicBool,
+    /// While open, every click outside counts, so the pointer is watched closely.
+    pub expanded: AtomicBool,
 }
 
 const POSITION_OFFSET: f32 = 100_000.0;
@@ -149,26 +151,40 @@ impl CursorShare {
         self.bottom.store(encode(rect.bottom()), Ordering::Relaxed);
     }
 
+    #[cfg(test)]
     fn contains(&self, x: f32, y: f32) -> bool {
-        let (x, y) = (encode(x), encode(y));
-        x >= self.left.load(Ordering::Relaxed)
-            && x <= self.right.load(Ordering::Relaxed)
-            && y >= self.top.load(Ordering::Relaxed)
-            && y <= self.bottom.load(Ordering::Relaxed)
+        self.distance(x, y) == 0
     }
+
+    /// Distance in pixels from the pointer to the notch, 0 when it is on it.
+    fn distance(&self, x: f32, y: f32) -> u32 {
+        let (x, y) = (encode(x), encode(y));
+        let dx = self.left.load(Ordering::Relaxed).saturating_sub(x).max(x.saturating_sub(self.right.load(Ordering::Relaxed)));
+        let dy = self.top.load(Ordering::Relaxed).saturating_sub(y).max(y.saturating_sub(self.bottom.load(Ordering::Relaxed)));
+        dx.max(dy)
+    }
+}
+
+/// How long the cursor thread sleeps: closely near the notch or while it is open, less often
+/// when the pointer is far away and a few milliseconds of delay cannot be noticed.
+fn cursor_poll_interval(distance: u32, expanded: bool) -> Duration {
+    if expanded || distance < 200 { Duration::from_millis(16) } else { Duration::from_millis(60) }
 }
 
 /// Polls the global pointer. It keeps running while the window passes clicks through and gets no events.
 fn start_cursor_thread(share: Arc<CursorShare>, ctx: egui::Context) {
     let _ = std::thread::Builder::new().name("cursor".into()).spawn(move || {
         let mut was_down = false;
+        let mut interval = Duration::from_millis(16);
         loop {
-            std::thread::sleep(Duration::from_millis(16));
+            std::thread::sleep(interval);
             if !share.running.load(Ordering::Relaxed) {
                 continue;
             }
             let Some((x, y)) = platform::cursor_position() else { continue };
-            let inside = share.contains(x, y);
+            let distance = share.distance(x, y);
+            interval = cursor_poll_interval(distance, share.expanded.load(Ordering::Relaxed));
+            let inside = distance == 0;
             if share.inside.swap(inside, Ordering::Relaxed) != inside {
                 ctx.request_repaint();
             }
@@ -236,6 +252,8 @@ pub struct Notch {
     toast: Option<ActiveToast>,
     cursor: Arc<CursorShare>,
     passthrough: Option<bool>,
+    /// Why the last frame asked for the next one; counted by `--stats`.
+    pub repaint_reason: &'static str,
     prepared: bool,
     placed_on: Option<usize>,
     window_origin: Pos2,
@@ -253,7 +271,6 @@ pub struct Notch {
     pub controls_ui: controls::ControlsUi,
     pub request_settings: bool,
     pub request_spotlight: bool,
-    pub drag_paths: Option<Vec<std::path::PathBuf>>,
     limits: Option<crate::services::claude::Limits>,
     limits_checked: Option<Instant>,
     last_claude_waiting: usize,
@@ -282,6 +299,7 @@ impl Notch {
             toast: None,
             cursor,
             passthrough: None,
+            repaint_reason: "start",
             prepared: false,
             placed_on: None,
             window_origin: Pos2::ZERO,
@@ -299,7 +317,6 @@ impl Notch {
             controls_ui: controls::ControlsUi::default(),
             request_settings: false,
             request_spotlight: false,
-            drag_paths: None,
             limits: None,
             limits_checked: None,
             last_claude_waiting: 0,
@@ -448,6 +465,7 @@ impl Notch {
         let origin = self.window_origin.to_vec2();
         let rect_px = Rect::from_min_max((hit.min.to_vec2() * platform_scale(scale)).to_pos2() + origin, (hit.max.to_vec2() * platform_scale(scale)).to_pos2() + origin);
         self.cursor.set_rect(if full_hide || !visual.is_positive() { Rect::from_min_size(pos2(-99_000.0, -99_000.0), vec2(1.0, 1.0)) } else { rect_px });
+        self.cursor.expanded.store(self.expanded, Ordering::Relaxed);
 
         let inside = self.cursor.inside.load(Ordering::Relaxed);
         let dragging = ctx.input(|i| i.pointer.any_down() && i.pointer.is_decidedly_dragging());
@@ -557,33 +575,41 @@ impl Notch {
             || (self.content - content_target).abs() > 0.002
             || self.view_alpha < 0.999;
         if animating {
+            self.repaint_reason = "animation";
             ctx.request_repaint();
         } else {
-            let wait = self.next_repaint(&activity);
+            let (wait, reason) = self.next_repaint(&activity);
+            self.repaint_reason = reason;
             ctx.request_repaint_after(wait);
         }
     }
 
-    fn next_repaint(&self, activity: &Activity) -> Duration {
+    /// How long the notch may wait before it draws again, and why (shown by `--stats`).
+    fn next_repaint(&self, activity: &Activity) -> (Duration, &'static str) {
+        let ms = Duration::from_millis;
         if self.toast.is_some() {
-            return Duration::from_millis(100);
+            return (ms(100), "toast");
         }
         if self.expanded {
             return match self.view {
-                View::Media => Duration::from_millis(if self.lyrics_open { 33 } else { 100 }),
-                View::Camera => Duration::from_millis(33),
-                View::Mixer => Duration::from_millis(50),
-                View::Weather => Duration::from_millis(40),
-                _ => Duration::from_millis(250),
+                View::Media => (ms(if self.lyrics_open { 33 } else { 100 }), "media tab"),
+                View::Camera => (ms(33), "camera tab"),
+                View::Mixer => (ms(50), "mixer tab"),
+                View::Weather => (ms(40), "weather tab"),
+                _ => (ms(250), "other tab"),
             };
         }
         if activity.media_playing {
-            return Duration::from_millis(33);
+            return (ms(33), "visualizer");
         }
-        if activity.claude_busy || activity.mic_active {
-            return Duration::from_millis(50);
+        // Both only pulse slowly, so a lower frame rate looks the same.
+        if activity.claude_busy {
+            return (ms(66), "claude busy");
         }
-        Duration::from_millis(1000)
+        if activity.mic_active {
+            return (ms(100), "microphone");
+        }
+        (ms(1000), "idle")
     }
 
     fn background_chores(&mut self, ctx: &egui::Context, settings: &Settings) {
@@ -1233,5 +1259,17 @@ mod tests {
         assert!(share.contains(-900.0, 10.0));
         assert!(!share.contains(-700.0, 10.0));
         assert!(!share.contains(-900.0, 50.0));
+    }
+
+    #[test]
+    fn cursor_is_watched_closely_only_near_or_open() {
+        let share = CursorShare::default();
+        share.set_rect(Rect::from_min_max(pos2(500.0, 0.0), pos2(700.0, 40.0)));
+        assert_eq!(share.distance(600.0, 20.0), 0);
+        assert_eq!(share.distance(600.0, 140.0), 100);
+        assert_eq!(share.distance(300.0, 20.0), 200);
+        assert_eq!(cursor_poll_interval(100, false), Duration::from_millis(16));
+        assert_eq!(cursor_poll_interval(900, false), Duration::from_millis(60));
+        assert_eq!(cursor_poll_interval(900, true), Duration::from_millis(16));
     }
 }

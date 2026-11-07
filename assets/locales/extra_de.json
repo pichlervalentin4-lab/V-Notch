@@ -33,6 +33,7 @@
   "port.mixer.empty": "Gerade spielt keine App Ton ab",
   "port.camera.hint": "Prüfe die Kamera in den Systemeinstellungen",
   "port.weather.blocked": "Durch deine Datenschutzeinstellungen blockiert",
+  "port.weather.loading": "Wetter wird geladen…",
   "port.translate.nothing": "Kein Text markiert",
   "port.translate.noOllama": "Ollama läuft nicht. Starte es oder wähle in den Einstellungen eine andere Methode.",
   "port.settings.about": "Über",

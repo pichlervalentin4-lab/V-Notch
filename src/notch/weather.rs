@@ -9,7 +9,7 @@ use crate::services::weather_service::WeatherStatus;
 use crate::settings::Settings;
 use crate::theme;
 use chrono::{Datelike, NaiveDate};
-use eframe::egui::{self, Align2, Color32, Mesh, Pos2, Rect, Shape, Stroke, Ui, pos2, vec2};
+use eframe::egui::{self, Align2, Color32, Pos2, Rect, Shape, Stroke, Ui, pos2, vec2};
 
 impl Notch {
     pub(super) fn weather_view(&mut self, ui: &mut Ui, body: Rect, settings: &Settings) {
@@ -17,7 +17,8 @@ impl Notch {
         match status {
             WeatherStatus::Ready(forecast) => self.forecast_panel(ui, body, &forecast),
             WeatherStatus::Loading => {
-                ui.painter().text(body.center(), Align2::CENTER_CENTER, t("audio.loading").replace("Audiomixer", "Wetter"), theme::regular(13.0), theme::DIM);
+                self.hub.weather.wake();
+                ui.painter().text(body.center(), Align2::CENTER_CENTER, t("port.weather.loading"), theme::regular(13.0), theme::DIM);
             }
             WeatherStatus::Failed => message(ui, body, &t("weather.unavailable"), &t("weather.retryLater")),
             WeatherStatus::Off => {
@@ -96,31 +97,10 @@ pub fn sky_colors(code: i32, is_day: bool) -> (Color32, Color32) {
 
 fn paint_sky(ui: &Ui, rect: Rect, code: i32, is_day: bool, time: f32) {
     let (top, bottom) = sky_colors(code, is_day);
-    // A vertical gradient as a mesh, then the rounded corners cut out by painting over them would look
-    // wrong on the art background, so the mesh is simply inset by the corner radius at top and bottom.
     let radius = 14.0;
-    let mut mesh = Mesh::default();
-    let steps = 6;
-    let corner_inset = |y: f32| {
-        let distance = if y < radius { radius - y } else if y > rect.height() - radius { y - (rect.height() - radius) } else { 0.0 };
-        radius - (radius * radius - distance * distance).max(0.0).sqrt()
-    };
-    let rows = 28 + steps;
-    for row in 0..=rows {
-        let y = rect.height() * row as f32 / rows as f32;
-        let inset = corner_inset(y);
-        let t = row as f32 / rows as f32;
-        let color = lerp_color(top, bottom, t);
-        let base = mesh.vertices.len() as u32;
-        mesh.colored_vertex(pos2(rect.left() + inset, rect.top() + y), color);
-        mesh.colored_vertex(pos2(rect.right() - inset, rect.top() + y), color);
-        if row > 0 {
-            mesh.add_triangle(base - 2, base - 1, base);
-            mesh.add_triangle(base - 1, base, base + 1);
-        }
-    }
-    ui.painter().add(Shape::mesh(mesh));
+    kit::gradient_rect(ui, rect, radius, top, bottom);
 
+    // Everything below stays clear of the rounded corners, so a plain rectangle clip is enough.
     let painter = ui.painter().with_clip_rect(rect.shrink(1.0).intersect(ui.clip_rect()));
     let wet = matches!(code, 51..=67 | 80..=82 | 95..=99);
     let snowing = matches!(code, 71..=77 | 85 | 86);
@@ -136,22 +116,20 @@ fn paint_sky(ui: &Ui, rect: Rect, code: i32, is_day: bool, time: f32) {
     }
     if is_day && !cloudy {
         let sun = pos2(rect.right() - 46.0, rect.top() + 56.0);
-        let glow = 22.0 + 2.5 * (time * 0.8).sin();
-        for (factor, alpha) in [(2.4, 0.06), (1.7, 0.1), (1.2, 0.2)] {
-            painter.circle_filled(sun, glow * factor, theme::alpha(Color32::from_rgb(255, 224, 130), alpha));
-        }
+        let pulse = 1.0 + 0.06 * (time * 0.8).sin();
+        kit::soft_shape(&painter, kit::Soft::Glow, sun, 1.7 * pulse, theme::alpha(Color32::from_rgb(255, 224, 130), 0.55));
         painter.circle_filled(sun, 18.0, Color32::from_rgb(255, 214, 90));
     }
     if cloudy {
-        let tint = if is_day { 0.28 } else { 0.1 };
-        for index in 0..4 {
+        let tint = theme::alpha(Color32::WHITE, if is_day { 0.24 } else { 0.1 });
+        // Three layers at different heights and speeds, far enough apart to overlap only at the rims.
+        for (index, (height, scale)) in [(0.0, 1.0), (40.0, 0.8), (78.0, 0.9)].into_iter().enumerate() {
             let speed = 5.0 + index as f32 * 2.5;
-            let span = rect.width() + 120.0;
-            let x = rect.left() - 60.0 + (time * speed + index as f32 * 67.0) % span;
-            let y = rect.top() + 34.0 + index as f32 * 22.0;
-            for (dx, dy, r) in [(0.0, 0.0, 20.0), (22.0, -6.0, 26.0), (48.0, 2.0, 18.0)] {
-                painter.circle_filled(pos2(x + dx, y + dy), r, theme::alpha(Color32::WHITE, tint));
-            }
+            let width = kit::Soft::Cloud.size().x * scale;
+            let span = rect.width() + width;
+            let x = rect.left() - width / 2.0 + (time * speed + index as f32 * 97.0) % span;
+            let y = rect.top() + radius + 30.0 + height;
+            kit::soft_shape(&painter, kit::Soft::Cloud, pos2(x, y), scale, tint);
         }
     }
     if wet {
@@ -178,11 +156,6 @@ fn paint_sky(ui: &Ui, rect: Rect, code: i32, is_day: bool, time: f32) {
             painter.rect_filled(rect, rounded(radius), theme::alpha(Color32::WHITE, flash * 0.35));
         }
     }
-}
-
-fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
-    let mix = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * t) as u8;
-    Color32::from_rgb(mix(a.r(), b.r()), mix(a.g(), b.g()), mix(a.b(), b.b()))
 }
 
 /// A stable pseudo-random number in 0..1, so stars and drops keep their place between frames.

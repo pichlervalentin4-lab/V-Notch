@@ -4,11 +4,13 @@ use super::weather::{self, Forecast, Place};
 use crate::settings::SharedSettings;
 use eframe::egui;
 use std::sync::mpsc::{self, Sender};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 const REFRESH: Duration = Duration::from_secs(15 * 60);
 const RETRY: Duration = Duration::from_secs(60);
+const START_DELAY: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum WeatherStatus {
@@ -22,12 +24,17 @@ pub enum WeatherStatus {
 pub struct WeatherService {
     pub status: Mutex<WeatherStatus>,
     refresh: Mutex<Sender<()>>,
+    woken: AtomicBool,
 }
 
 impl WeatherService {
     pub fn start(ctx: egui::Context, settings: SharedSettings, demo: bool) -> Arc<Self> {
         let (sender, receiver) = mpsc::channel();
-        let service = Arc::new(Self { status: Mutex::new(WeatherStatus::Off), refresh: Mutex::new(sender) });
+        let service = Arc::new(Self {
+            status: Mutex::new(WeatherStatus::Loading),
+            refresh: Mutex::new(sender),
+            woken: AtomicBool::new(false),
+        });
         if demo {
             if let Ok(mut status) = service.status.lock() {
                 *status = WeatherStatus::Ready(Arc::new(demo_forecast()));
@@ -36,6 +43,10 @@ impl WeatherService {
         }
         let worker = service.clone();
         let _ = std::thread::Builder::new().name("weather".into()).spawn(move || {
+            // The first HTTPS request loads the TLS libraries, which briefly stalls the window on
+            // Windows. Waiting until the opening animation is over hides that; opening the weather
+            // tab ends the wait early.
+            let _ = receiver.recv_timeout(START_DELAY);
             let mut cached_place: Option<(String, Place)> = None;
             loop {
                 let (enabled, city, fahrenheit) = settings.read(|s| {
@@ -74,6 +85,13 @@ impl WeatherService {
         if let Ok(mut status) = self.status.lock() {
             *status = next;
             ctx.request_repaint();
+        }
+    }
+
+    /// Ends the start-up wait once, when the weather tab is opened before the first fetch.
+    pub fn wake(&self) {
+        if !self.woken.swap(true, Ordering::Relaxed) {
+            self.refresh_now();
         }
     }
 

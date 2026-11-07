@@ -194,6 +194,9 @@ impl SystemService {
             }
 
             if let Ok(mut state) = self.state.lock() {
+                // The idle time grows every second; the notch picks it up on its own once-a-second
+                // frame, so only other changes need an extra one.
+                state.idle_seconds = next.idle_seconds;
                 let changed = *state != next;
                 *state = next;
                 if changed {

@@ -166,6 +166,16 @@ pub enum Status {
     Done,
 }
 
+/// The last folder of a working directory. Splits on both separators, because the hook
+/// can report a Windows path to a Linux build (WSL) and the other way round.
+fn project_name(cwd: &str) -> String {
+    cwd.trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|name| !name.is_empty() && !name.ends_with(':'))
+        .map_or_else(|| "Claude".to_string(), str::to_string)
+}
+
 #[derive(Clone, Debug)]
 pub struct Session {
     pub id: String,
@@ -185,7 +195,7 @@ pub struct Session {
 
 impl Session {
     pub fn project(&self) -> String {
-        Path::new(&self.cwd).file_name().map_or_else(|| "Claude".to_string(), |n| n.to_string_lossy().into_owned())
+        project_name(&self.cwd)
     }
 
     pub fn name(&self) -> String {
@@ -975,6 +985,15 @@ mod tests {
         assert_eq!(describe_tool("", &json!({})), "");
         let long = "x".repeat(200);
         assert!(describe_tool("Bash", &json!({"command": long})).chars().count() < 95);
+    }
+
+    #[test]
+    fn project_name_works_for_every_path_style() {
+        assert_eq!(project_name(r"C:\work\proj"), "proj");
+        assert_eq!(project_name("/home/me/proj/"), "proj");
+        assert_eq!(project_name(r"C:\"), "Claude");
+        assert_eq!(project_name("/"), "Claude");
+        assert_eq!(project_name(""), "Claude");
     }
 
     #[test]

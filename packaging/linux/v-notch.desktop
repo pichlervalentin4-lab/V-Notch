@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=V-Notch
+Comment=Media, clipboard, weather and Claude Code at the top of the screen
+Exec=v-notch
+Icon=v-notch
+Categories=Utility;AudioVideo;
+StartupNotify=false
+Terminal=false

@@ -122,6 +122,8 @@ pub fn apply_style(ctx: &egui::Context) {
     visuals.selection.bg_fill = ACCENT.linear_multiply(0.45);
     visuals.hyperlink_color = ACCENT;
     visuals.override_text_color = Some(WHITE);
+    // Glyphs snapped to whole pixels: sharper small text at 100 % display scaling.
+    visuals.text_options.subpixel_binning = false;
     ctx.set_visuals(visuals);
     ctx.global_style_mut(|style| {
         style.spacing.item_spacing = egui::vec2(8.0, 6.0);
