@@ -123,12 +123,17 @@ warm-up run: time from process start to the first visible window, then 10 s to s
 | | Rust port | C# original |
 | --- | --- | --- |
 | Start until the window shows | **~128 ms** | ~1,490 ms |
-| CPU while idle (share of one core) | **~0.7 %** | ~34.9 % |
+| CPU while idle (share of one core) | **~0.7 %** | ~34.9 % ¹ |
 | Private memory | **~134 MB** | ~154 MB |
 | Working set | **~144 MB** | ~192 MB |
 | Threads / handles | **27 / 668** | 37 / 1,326 |
 | Download size | **15 MB, one file** | 150 MB in 47 files, plus the .NET 8 runtime |
 | Animation | ~167 fps (follows the screen's refresh rate) | |
+
+¹ Most of the original's idle CPU load came from a bug in the original: a star animation in its hidden
+settings window kept running. David fixed it on 2026-11-07; according to his commit the original now uses
+about 16–20 % (with music playing). The measurement above was taken before that fix and has not been
+repeated yet, so the CPU comparison favours the Rust port.
 
 About 118 MB of the Rust port's memory is the OpenGL driver and window: an empty eframe window
 (`cargo run --release --example blank`) already uses that much on this machine.
