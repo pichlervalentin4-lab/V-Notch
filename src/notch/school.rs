@@ -11,6 +11,7 @@ use super::{Notch, View, glyph};
 use crate::i18n::{t, tf};
 use crate::icons;
 use crate::services::moodle::{Deadline, MoodleStatus, short_course};
+use crate::services::teams::{Meeting, TeamsStatus};
 use crate::services::untis::{Exam, UntisStatus};
 use crate::settings::Settings;
 use crate::theme;
@@ -37,6 +38,7 @@ const MAX_DEADLINES: usize = 4;
 /// Test tiles and timetable changes, as many as the original shows.
 const MAX_EXAMS: usize = 4;
 const MAX_CHANGES: usize = 4;
+const MAX_MEETINGS: usize = 3;
 /// Tests within this many days glow rosé.
 const EXAM_SOON_DAYS: i64 = 5;
 const ROW_H: f32 = 34.0;
@@ -92,10 +94,21 @@ impl Notch {
         let untis = self.hub.untis.status.lock().map(|s| s.clone()).unwrap_or_default();
         let now = Local::now();
         let today = now.date_naive();
-        let open: Vec<Deadline> = match &status {
+        let teams = self.hub.teams.status.lock().map(|s| s.clone()).unwrap_or_default();
+        let teams_data = match &teams {
+            TeamsStatus::Ready(data) => Some(data.clone()),
+            _ => None,
+        };
+        let mut open: Vec<Deadline> = match &status {
             MoodleStatus::Ready(list) => list.iter().filter(|d| d.due >= now && !d.overdue).cloned().collect(),
             _ => Vec::new(),
         };
+        // Teams assignments join Moodle's deadlines in one list.
+        if let Some(data) = &teams_data {
+            open.extend(data.assignments.iter().filter(|d| d.due >= now).cloned());
+            open.sort_by_key(|d| d.due);
+        }
+        let meetings: Vec<Meeting> = teams_data.as_ref().map(|d| d.meetings.iter().take(MAX_MEETINGS).cloned().collect()).unwrap_or_default();
         let timetable = match &untis {
             UntisStatus::Ready(timetable) => Some(timetable.clone()),
             _ => None,
@@ -133,16 +146,26 @@ impl Notch {
 
         // Moodle: the next deadline big, then the rest.
         let message = match &status {
-            MoodleStatus::NotConfigured => (timetable.is_none()).then(|| t("port.school.noMoodle")),
+            MoodleStatus::NotConfigured => (timetable.is_none() && teams_data.is_none()).then(|| t("port.school.noMoodle")),
             MoodleStatus::NoToken => Some(t("port.school.noToken")),
             MoodleStatus::Loading => Some(t("pi.loading")),
             MoodleStatus::Failed(error) => Some(tf("port.school.failed", &[error])),
             MoodleStatus::Ready(_) => None,
         };
+        let teams_message = match &teams {
+            TeamsStatus::SignedOut => Some(t("port.school.teamsSignedOut")),
+            TeamsStatus::Failed(error) => Some(tf("port.school.teamsFailed", &[error])),
+            _ => None,
+        };
         if let Some(message) = message {
             status_row(ui, Rect::from_min_max(pos2(body.left(), y), body.max), &message);
             y += 42.0;
-        } else if matches!(status, MoodleStatus::Ready(_)) {
+        }
+        if let Some(message) = teams_message {
+            status_row(ui, Rect::from_min_max(pos2(body.left(), y), body.max), &message);
+            y += 42.0;
+        }
+        if matches!(status, MoodleStatus::Ready(_)) || teams_data.is_some() {
             if let Some(next) = open.first() {
                 self.deadline_hero(ui, Rect::from_min_max(pos2(body.left(), y), pos2(body.right(), y + HERO_RING)), next, now, mood[0]);
                 y += HERO_RING + 6.0;
@@ -168,6 +191,19 @@ impl Notch {
                     link(ui, row, &deadline.url, ("deadline", deadline.id));
                     y += ROW_STEP;
                 }
+            }
+        }
+
+        // Teams: the next meetings; a click joins (or opens the calendar entry).
+        if !meetings.is_empty() {
+            y += 12.0;
+            section_title(ui, body.left(), y, &t("port.school.meetings"));
+            y += 18.0 + 6.0;
+            for (index, meeting) in meetings.iter().enumerate() {
+                let (when, tint) = meeting_when(meeting, now);
+                let row = icon_row(ui, y + 4.0, body.left(), icons::CALENDAR_BLANK, &meeting.subject, Color32::WHITE, Some((&when, tint)));
+                link(ui, row, &meeting.url, ("meeting", index));
+                y += ROW_STEP;
             }
         }
 
@@ -255,6 +291,19 @@ impl Notch {
         );
         text_clipped(ui, pos2(x, center.y + 12.0), Align2::LEFT_CENTER, &meta, theme::bold(12.0), lerp_color(mood, Color32::WHITE, 0.35), width);
         link(ui, title.union(Rect::from_center_size(center, vec2(HERO_RING, HERO_RING))), &deadline.url, ("hero-link", deadline.id));
+    }
+}
+
+/// "now", "today 07:50", "tomorrow 07:50", "Mi 12.11. 07:50" and the colour for it.
+fn meeting_when(meeting: &Meeting, now: chrono::DateTime<Local>) -> (String, Color32) {
+    let at = format!("{:02}:{:02}", meeting.start.hour(), meeting.start.minute());
+    if meeting.start <= now {
+        return (t("port.school.meetingNow"), DUE_TODAY);
+    }
+    match (meeting.start.date_naive() - now.date_naive()).num_days() {
+        0 => (format!("{} {at}", t("school.today")), DUE_SOON),
+        1 => (tf("pi.dueTomorrow", &[&at]), MUTED),
+        _ => (format!("{} {}.{}. {at}", weekday_short(meeting.start.weekday()), meeting.start.day(), meeting.start.month()), MUTED),
     }
 }
 

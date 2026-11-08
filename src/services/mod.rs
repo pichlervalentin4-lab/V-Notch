@@ -18,6 +18,7 @@ pub mod sounds;
 pub mod system;
 #[allow(dead_code)]
 pub mod timer;
+pub mod teams;
 pub mod untis;
 pub mod tray;
 pub mod updates;
@@ -67,6 +68,7 @@ pub struct Hub {
     pub legion: Arc<legion::LegionService>,
     pub moodle: Arc<moodle::MoodleService>,
     pub untis: Arc<untis::UntisService>,
+    pub teams: Arc<teams::TeamsService>,
     pub updates: Arc<updates::UpdateService>,
     pub toasts: Shared<VecDeque<Toast>>,
     pub demo: bool,
@@ -97,6 +99,7 @@ impl Hub {
             legion: legion::LegionService::start(ctx.clone(), demo),
             moodle: moodle::MoodleService::start(ctx.clone(), settings.clone(), demo),
             untis: untis::UntisService::start(ctx.clone(), settings.clone(), demo),
+            teams: teams::TeamsService::start(ctx.clone(), settings.clone(), demo),
             updates: updates::UpdateService::new(ctx.clone()),
             toasts,
             demo,

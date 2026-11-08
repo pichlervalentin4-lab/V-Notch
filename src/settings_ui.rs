@@ -71,6 +71,9 @@ struct SchoolForm {
     ical: String,
     has_ical: Option<bool>,
     ical_message: Option<String>,
+    has_teams: Option<bool>,
+    teams_login: Option<Arc<std::sync::Mutex<crate::services::teams::SignIn>>>,
+    teams_message: Option<String>,
     untis_password: String,
     has_untis_password: Option<bool>,
     untis_message: Option<String>,
@@ -523,6 +526,71 @@ impl SettingsWindow {
         let status = if has_password { t("port.settings.untisHasPassword") } else { t("port.settings.moodleNoToken") };
         hint(ui, &format!("{status}. {}", t("port.settings.untisHint")));
         if let Some(message) = &form.untis_message {
+            ui.label(RichText::new(message).font(theme::regular(12.0)));
+        }
+        self.teams_settings(ui);
+    }
+
+    /// Teams through Microsoft Graph: the user's own app registration, then a device code sign-in in
+    /// the browser. Only the refresh token is kept, in the secret store.
+    fn teams_settings(&mut self, ui: &mut Ui) {
+        use crate::services::teams::{self, SignIn};
+        section_gap(ui);
+        heading(ui, &t("port.settings.teams"));
+        text_row(ui, &t("port.settings.teamsClient"), &mut self.draft.teams_client_id, "00000000-0000-0000-0000-000000000000");
+        text_row(ui, &t("port.settings.teamsTenant"), &mut self.draft.teams_tenant, "example.onmicrosoft.com");
+        let client = self.draft.teams_client_id.trim().to_string();
+        let tenant = teams::tenant_of(&self.draft.teams_tenant);
+        let hub = self.hub.clone();
+        let form = &mut self.school;
+        let signed_in = *form.has_teams.get_or_insert_with(|| platform::secret_get(teams::REFRESH_SECRET).is_some_and(|t| !t.is_empty()));
+
+        // A sign-in that finished.
+        let step = form.teams_login.as_ref().and_then(|s| s.lock().ok().map(|s| s.clone()));
+        if let Some(SignIn::Done(result)) = &step {
+            form.teams_login = None;
+            form.teams_message = Some(match result {
+                Ok(()) => {
+                    form.has_teams = Some(true);
+                    hub.teams.refresh();
+                    t("port.settings.teamsSaved")
+                }
+                Err(error) => tf("port.school.teamsFailed", &[error]),
+            });
+        }
+        let busy = form.teams_login.is_some();
+        row(ui, &t("port.settings.teamsAccount"), |ui| {
+            if signed_in && ui.button(t("port.settings.moodleForget")).clicked() {
+                platform::secret_set(teams::REFRESH_SECRET, "");
+                form.has_teams = Some(false);
+                form.teams_message = None;
+                hub.teams.refresh();
+            }
+            let label = if busy { t("pi.loading") } else { t("port.settings.teamsSignIn") };
+            if ui.add_enabled(!busy && !client.is_empty(), egui::Button::new(label)).clicked() {
+                let state = Arc::new(std::sync::Mutex::new(SignIn::Starting));
+                form.teams_login = Some(state.clone());
+                form.teams_message = None;
+                teams::sign_in(tenant.clone(), client.clone(), state, ui.ctx().clone());
+            }
+            let status = if signed_in { t("port.settings.teamsSignedIn") } else { t("port.settings.moodleNoToken") };
+            ui.label(RichText::new(status).font(theme::regular(12.0)).color(if signed_in { theme::GREEN } else { theme::DIM }));
+        });
+        // The code is short-lived and only good together with the user's own sign-in.
+        if let Some(SignIn::Code { code, uri }) = &step {
+            row(ui, &t("port.settings.teamsCode"), |ui| {
+                ui.label(RichText::new(code).font(theme::bold(16.0)));
+                if ui.button(t("port.settings.teamsCopy")).clicked() {
+                    ui.ctx().copy_text(code.clone());
+                }
+                if ui.button(t("port.settings.teamsOpen")).clicked() {
+                    let _ = open::that_detached(uri);
+                }
+            });
+            hint(ui, &tf("port.settings.teamsCodeHint", &[uri]));
+        }
+        hint(ui, &t("port.settings.teamsHint"));
+        if let Some(message) = &form.teams_message {
             ui.label(RichText::new(message).font(theme::regular(12.0)));
         }
     }

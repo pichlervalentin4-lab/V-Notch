@@ -141,6 +141,11 @@ pub struct Settings {
     pub school_untis_server: String,
     pub school_untis_school: String,
     pub school_untis_user: String,
+    /// The user's own Entra app registration for Microsoft Graph (Teams assignments, meetings).
+    /// Neither value is secret; the sign-in itself lives in the secret store.
+    pub teams_client_id: String,
+    /// Directory (tenant) id or domain of the school, e.g. example.onmicrosoft.com.
+    pub teams_tenant: String,
     pub battery_device_id: String,
 }
 
@@ -258,6 +263,8 @@ impl Default for Settings {
             school_untis_server: String::new(),
             school_untis_school: String::new(),
             school_untis_user: String::new(),
+            teams_client_id: String::new(),
+            teams_tenant: String::new(),
             battery_device_id: String::new(),
         }
     }
