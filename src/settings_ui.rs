@@ -381,6 +381,19 @@ impl SettingsWindow {
             }
         });
         row(ui, "", |ui| {
+            // Reads the clipboard straight away; the link is never shown, only saved when it is one.
+            if ui.button(t("port.settings.moodleIcalFromClipboard")).clicked() {
+                let text = arboard::Clipboard::new().ok().and_then(|mut board| board.get_text().ok()).unwrap_or_default();
+                form.ical_message = Some(match moodle::ical_link_from_input(&text) {
+                    Some(link) if platform::secret_set(moodle::ICAL_SECRET, &link) => {
+                        form.has_ical = Some(true);
+                        hub.moodle.refresh();
+                        t("port.settings.moodleIcalSaved")
+                    }
+                    Some(_) => t("error.apiKeyEncrypt"),
+                    None => t("port.settings.moodleNoIcalInClipboard"),
+                });
+            }
             if ui.add_enabled(!base.is_empty(), egui::Button::new(t("port.settings.moodleIcalOpen"))).clicked() {
                 let _ = open::that_detached(moodle::ical_export_page(&base));
             }

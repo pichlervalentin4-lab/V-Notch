@@ -109,6 +109,8 @@
   "port.settings.moodleBrowserOpen": "Moodle-Anmeldung öffnen",
   "port.settings.moodleBrowserHint": "Geht auch mit dem Microsoft-Login der Schule. Am Ende zeigt der Browser eine Fehlerseite oder will die Moodle-App öffnen: die Adresse kopieren, die mit „moodlemobile://token=“ beginnt (Adressleiste, oder Entwicklertools F12 → Konsole), und oben einfügen.",
   "port.settings.moodleBadToken": "Das ist weder ein Moodle-Token noch ein moodlemobile://-Link.",
+  "port.settings.moodleIcalFromClipboard": "Aus Zwischenablage einfügen",
+  "port.settings.moodleNoIcalInClipboard": "In der Zwischenablage ist kein Moodle-Kalender-Link (…/calendar/export_execute.php?…&authtoken=…). Den Link auf der Exportseite markieren, Strg+C drücken und noch einmal klicken.",
   "port.settings.moodleIcal": "Kalender-Link",
   "port.settings.moodleHasIcal": "Kalender-Link gespeichert (verschlüsselt)",
   "port.settings.moodleIcalPaste": "Kalender-Link einfügen",

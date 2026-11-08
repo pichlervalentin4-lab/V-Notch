@@ -430,6 +430,10 @@ impl ClipboardService {
                 continue;
             }
             last_hash = entry.hash;
+            // A Moodle calendar link opens the calendar like a password: it never enters the history.
+            if crate::services::moodle::ical_link_from_input(&entry.text).is_some() {
+                continue;
+            }
             entry.created_unix = now;
             if entry.kind != ClipKind::Image && entry.kind != ClipKind::Files {
                 entry.sensitive = is_sensitive(&entry.text);
