@@ -31,6 +31,18 @@ pub fn horizontal_gradient_rect(ui: &Ui, rect: Rect, radius: f32, left: Color32,
     ui.painter().add(egui::epaint::RectShape::filled(rect, rounded(radius), Color32::WHITE).with_texture(texture, uv));
 }
 
+/// A rounded rectangle with a vertical gradient from 	op to ottom.
+pub fn vertical_gradient_rect(ui: &Ui, rect: Rect, radius: f32, top: Color32, bottom: Color32) {
+    let key = format!("vgradient-{:?}-{:?}", top.to_array(), bottom.to_array());
+    let texture = cached_texture(ui.ctx(), &key, || {
+        const ROWS: usize = 128;
+        let pixels = (0..ROWS).map(|row| lerp_color(top, bottom, row as f32 / (ROWS - 1) as f32)).collect();
+        egui::ColorImage::new([1, ROWS], pixels)
+    });
+    let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+    ui.painter().add(egui::epaint::RectShape::filled(rect, rounded(radius), Color32::WHITE).with_texture(texture, uv));
+}
+
 /// A plain horizontal fade over `rect`, e.g. to let text run out into the black notch.
 pub fn horizontal_fade(ui: &Ui, rect: Rect, left: Color32, right: Color32) {
     horizontal_gradient_rect(ui, rect, 0.0, left, right);

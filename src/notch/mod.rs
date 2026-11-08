@@ -1086,7 +1086,9 @@ impl Notch {
             }
         }
 
-        let gear = Rect::from_center_size(pos2(rect.right() - 13.0 - 12.0, rect.top() + 2.0 + 12.0), vec2(24.0, 24.0));
+        // On the shelf the gear is the last of the tray's header buttons, as in the original.
+        let gear_x = if self.view == View::Shelf { rect.right() - 42.0 } else { rect.right() - 13.0 - 12.0 };
+        let gear = Rect::from_center_size(pos2(gear_x, rect.top() + 2.0 + 12.0), vec2(24.0, 24.0));
         let response = ui.interact(gear, ui.id().with("nav-settings"), Sense::click());
         let hover = ui.ctx().animate_bool_with_time(response.id.with("hover"), response.hovered(), 0.15);
         glyph::paint(ui.painter(), gear.center(), 16.2, glyph::GEAR, theme::alpha(Color32::WHITE, lerp(0.8, 1.0, hover)));
@@ -1128,10 +1130,11 @@ fn content_margins(view: View) -> [f32; 4] {
         // The media tab places everything itself, measured from the notch's corner.
         View::Media => [0.0, 0.0, 0.0, 0.0],
         View::Camera => [16.0, 36.0, 16.0, 16.0],
+        // The tray's 888 px grid, from the very top: its search field shares the row with the tabs.
+        View::Shelf => [16.0, 0.0, 16.0, 16.0],
         // The original's 682 px mixer list, centred in the 720 px notch.
         View::Mixer => [19.0, 37.0, 19.0, 24.0],
         View::Claude | View::Controls | View::Legion | View::Weather => [20.0, 34.0, 20.0, 14.0],
-        _ => [16.0, NAV_H + 8.0, 16.0, 12.0],
     }
 }
 
