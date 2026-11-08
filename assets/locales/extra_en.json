@@ -104,5 +104,5 @@
   "port.settings.untisPassword": "Password",
   "port.settings.untisHasPassword": "Password saved (encrypted)",
   "port.settings.untisSaved": "Saved. The school tab reads Untis now.",
-  "port.settings.untisHint": "Server and school as in the address of your school's Untis login page. Untis has no token, so the password is kept encrypted to sign in; accounts that only sign in with Microsoft do not work."
+  "port.settings.untisHint": "Server and school as in the address of your school's Untis login page; without a server the school is looked up by name. Untis has no token, so the password is kept encrypted to sign in; accounts that only sign in with Microsoft do not work."
 }

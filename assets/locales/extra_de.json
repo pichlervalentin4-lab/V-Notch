@@ -104,5 +104,5 @@
   "port.settings.untisPassword": "Passwort",
   "port.settings.untisHasPassword": "Passwort gespeichert (verschlüsselt)",
   "port.settings.untisSaved": "Gespeichert. Der Schule-Tab liest jetzt Untis.",
-  "port.settings.untisHint": "Server und Schule wie in der Adresse der Untis-Anmeldeseite deiner Schule. Untis kennt kein Token, deshalb wird das Passwort verschlüsselt gespeichert; Konten, die sich nur mit Microsoft anmelden, gehen nicht."
+  "port.settings.untisHint": "Server und Schule wie in der Adresse der Untis-Anmeldeseite deiner Schule; ohne Server sucht die App die Schule über ihren Namen. Untis kennt kein Token, deshalb wird das Passwort verschlüsselt gespeichert; Konten, die sich nur mit Microsoft anmelden, gehen nicht."
 }

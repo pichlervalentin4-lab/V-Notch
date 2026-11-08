@@ -82,6 +82,27 @@ impl Account {
         (!server.is_empty() && !school.is_empty() && !user.is_empty()).then(|| Self { server: server.into(), school: school.into(), user: user.into() })
     }
 
+    /// Without a server the school is looked up in Untis' own school search (what the Untis app does).
+    fn from_settings_or_search(server: &str, school: &str, user: &str, found: &mut Option<(String, Account)>) -> Result<Option<Self>, String> {
+        if let Some(account) = Self::from_settings(server, school, user) {
+            return Ok(Some(account));
+        }
+        let (school, user) = (school.trim(), user.trim());
+        if !server.trim().is_empty() || school.is_empty() || user.is_empty() {
+            return Ok(None);
+        }
+        let key = format!("{school}\n{user}");
+        if let Some((cached, account)) = found
+            && *cached == key
+        {
+            return Ok(Some(account.clone()));
+        }
+        let (server, login) = search_school(school)?;
+        let account = Self { server, school: login, user: user.into() };
+        *found = Some((key, account.clone()));
+        Ok(Some(account))
+    }
+
     fn rpc_url(&self) -> String {
         format!("https://{}/WebUntis/jsonrpc.do?school={}", self.server, crate::services::http::encode(&self.school))
     }
@@ -111,20 +132,39 @@ impl UntisService {
 
     fn run(&self, settings: &SharedSettings, ctx: &egui::Context) {
         let mut next: Option<Instant> = None;
+        let mut found: Option<(String, Account)> = None;
         loop {
             std::thread::sleep(Duration::from_millis(500));
-            let account = settings.read(|s| {
-                if s.enable_local_only_mode { None } else { Account::from_settings(&s.school_untis_server, &s.school_untis_school, &s.school_untis_user) }
+            let fields = settings.read(|s| {
+                (!s.enable_local_only_mode).then(|| (s.school_untis_server.clone(), s.school_untis_school.clone(), s.school_untis_user.clone()))
             });
-            let Some(account) = account else {
+            let Some((server, school, user)) = fields else {
                 self.set(UntisStatus::NotConfigured);
                 continue;
             };
+            if Account::from_settings(&server, &school, &user).is_none() && (school.trim().is_empty() || user.trim().is_empty()) {
+                self.set(UntisStatus::NotConfigured);
+                continue;
+            }
             let forced = self.refresh_now.swap(false, Ordering::Relaxed);
             let due = next.is_none_or(|at| Instant::now() >= at);
             if !forced && !(due && self.wanted.load(Ordering::Relaxed)) {
                 continue;
             }
+            let account = match Account::from_settings_or_search(&server, &school, &user, &mut found) {
+                Ok(Some(account)) => account,
+                Ok(None) => {
+                    self.set(UntisStatus::NotConfigured);
+                    continue;
+                }
+                Err(error) => {
+                    crate::vlog!("UNTIS", "school search failed: {error}");
+                    self.set(UntisStatus::Failed(error));
+                    next = Some(Instant::now() + RETRY);
+                    ctx.request_repaint();
+                    continue;
+                }
+            };
             let Some(password) = platform::secret_get(PASSWORD_SECRET).filter(|p| !p.is_empty()) else {
                 self.set(UntisStatus::NoPassword);
                 next = None;
@@ -148,6 +188,36 @@ impl UntisService {
             ctx.request_repaint();
         }
     }
+}
+
+/// Finds a school by name in Untis' school search: its server and its login name.
+fn search_school(query: &str) -> Result<(String, String), String> {
+    let body = json!({ "id": "1", "method": "searchSchool", "params": [{ "search": query }], "jsonrpc": "2.0" });
+    let mut response = crate::services::http::agent(TIMEOUT)
+        .post("https://mobile.webuntis.com/ms/schoolquery2")
+        .header("User-Agent", CLIENT)
+        .send_json(&body)
+        .map_err(|_| "Untis school search not reachable".to_string())?;
+    let reply: Value = response.body_mut().read_json().map_err(|_| "Untis school search did not answer".to_string())?;
+    pick_school(&rpc_result(reply)?, query)
+}
+
+/// The school whose login name or display name matches `query`, else the only hit.
+pub fn pick_school(result: &Value, query: &str) -> Result<(String, String), String> {
+    let schools = result["schools"].as_array().cloned().unwrap_or_default();
+    let query = query.trim().to_lowercase();
+    let exact = schools.iter().find(|s| {
+        [s["loginName"].as_str(), s["displayName"].as_str()].into_iter().flatten().any(|name| name.trim().to_lowercase() == query)
+    });
+    let school = exact.or(if schools.len() == 1 { schools.first() } else { None }).ok_or_else(|| {
+        if schools.is_empty() { "school not found – check the school name or enter the Untis server".to_string() } else { "several schools match – enter the exact login name or the Untis server".to_string() }
+    })?;
+    let server = school["server"].as_str().unwrap_or_default().trim_end_matches('/').to_string();
+    let login = school["loginName"].as_str().unwrap_or_default().to_string();
+    if server.is_empty() || login.is_empty() {
+        return Err("Untis gave no server for this school".into());
+    }
+    Ok((server, login))
 }
 
 /// One signed-in session: the JSESSIONID cookie Untis sets.
@@ -386,6 +456,19 @@ mod tests {
         assert_eq!(account.server, "example.webuntis.com");
         assert_eq!(account.rpc_url(), "https://example.webuntis.com/WebUntis/jsonrpc.do?school=Example%20School");
         assert!(Account::from_settings("example.webuntis.com", "", "student1").is_none());
+    }
+
+    #[test]
+    fn schools_are_found_by_name() {
+        let result = json!({ "size": 2, "schools": [
+            { "server": "alpha.webuntis.com", "loginName": "Example School", "displayName": "Example School, Sample Town" },
+            { "server": "beta.webuntis.com", "loginName": "example-other", "displayName": "Other School" }
+        ] });
+        assert_eq!(pick_school(&result, "example school").unwrap(), ("alpha.webuntis.com".into(), "Example School".into()));
+        assert!(pick_school(&result, "example").is_err());
+        let one = json!({ "schools": [{ "server": "gamma.webuntis.com", "loginName": "only" }] });
+        assert_eq!(pick_school(&one, "whatever").unwrap().0, "gamma.webuntis.com");
+        assert!(pick_school(&json!({ "schools": [] }), "x").is_err());
     }
 
     #[test]
