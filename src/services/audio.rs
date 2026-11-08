@@ -17,6 +17,7 @@ pub enum AudioCommand {
     SetSessionMute(String, bool),
     SetDefaultDevice(String),
     SetMicMute(bool),
+    SetMic(f32),
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -148,5 +149,6 @@ fn apply(backend: &AudioBackend, command: AudioCommand) {
         AudioCommand::SetSessionMute(id, muted) => backend.set_session_mute(&id, muted),
         AudioCommand::SetDefaultDevice(id) => backend.set_default_device(&id),
         AudioCommand::SetMicMute(muted) => backend.set_mic_muted(muted),
+        AudioCommand::SetMic(level) => backend.set_mic(level),
     }
 }

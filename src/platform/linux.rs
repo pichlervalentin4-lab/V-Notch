@@ -333,6 +333,11 @@ impl AudioBackend {
         Self::sink_state("source", "@DEFAULT_SOURCE@")
     }
 
+    pub fn set_mic(&self, level: f32) {
+        let value = format!("{}%", (level.clamp(0.0, 1.0) * 100.0).round() as u32);
+        pactl(&["set-source-volume", "@DEFAULT_SOURCE@", &value]);
+    }
+
     pub fn set_mic_muted(&self, muted: bool) {
         pactl(&["set-source-mute", "@DEFAULT_SOURCE@", if muted { "1" } else { "0" }]);
     }

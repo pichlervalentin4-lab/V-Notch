@@ -356,6 +356,10 @@ impl AudioBackend {
         Some(VolumeInfo { level, muted: level == 0.0 })
     }
 
+    pub fn set_mic(&self, level: f32) {
+        osascript(&format!("set volume input volume {}", (level.clamp(0.0, 1.0) * 100.0).round() as u32));
+    }
+
     /// macOS has no input mute switch, so muting means an input volume of zero.
     pub fn set_mic_muted(&self, muted: bool) {
         osascript(&format!("set volume input volume {}", if muted { 0 } else { 75 }));

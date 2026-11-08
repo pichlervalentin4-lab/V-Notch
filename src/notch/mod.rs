@@ -288,6 +288,7 @@ pub struct Notch {
     pub claude_ui: claude::ClaudeUi,
     pub camera_ui: camera::CameraUi,
     pub controls_ui: controls::ControlsUi,
+    pub mixer_ui: mixer::MixerUi,
     pub request_settings: bool,
     pub request_spotlight: bool,
     limits: Option<crate::services::claude::Limits>,
@@ -335,6 +336,7 @@ impl Notch {
             claude_ui: claude::ClaudeUi::default(),
             camera_ui: camera::CameraUi::default(),
             controls_ui: controls::ControlsUi::default(),
+            mixer_ui: mixer::MixerUi::default(),
             request_settings: false,
             request_spotlight: false,
             limits: None,
@@ -394,10 +396,19 @@ impl Notch {
         self.placed_on = None;
     }
 
+    /// Height a tab that sizes itself to its content asks for (Claude, mixer); unused by the others.
+    fn wanted_height(&self) -> f32 {
+        match self.view {
+            View::Claude => self.claude_ui.wanted_height,
+            View::Mixer => self.mixer_height(),
+            _ => 0.0,
+        }
+    }
+
     fn target_size(&self, settings: &Settings, activity: &Activity) -> (f32, f32, f32) {
         let (base_w, base_h) = Self::compact_base(settings);
         if self.expanded {
-            let (w, h) = open_size(self.view, self.claude_ui.wanted_height);
+            let (w, h) = open_size(self.view, self.wanted_height());
             let radius = if settings.enable_dynamic_island_mode { 32.0 } else { 20.0 };
             return (w, h, radius);
         }
@@ -555,7 +566,7 @@ impl Notch {
 
         let (compact_w, compact_h) = Self::compact_base(&settings);
         // Measured against the height this tab really opens to: the Claude tab's height follows its content.
-        let open_progress = open_progress(self.height.value, compact_h, open_size(self.view, self.claude_ui.wanted_height).1);
+        let open_progress = open_progress(self.height.value, compact_h, open_size(self.view, self.wanted_height()).1);
         let content_target = if self.expanded { smoothstep(0.55, 0.95, open_progress) } else { 0.0 };
         self.content = approach(self.content, content_target, 18.0, dt);
         let _ = compact_w;
@@ -1117,15 +1128,22 @@ fn content_margins(view: View) -> [f32; 4] {
         // The media tab places everything itself, measured from the notch's corner.
         View::Media => [0.0, 0.0, 0.0, 0.0],
         View::Camera => [16.0, 36.0, 16.0, 16.0],
+        // The original's 682 px mixer list, centred in the 720 px notch.
+        View::Mixer => [19.0, 37.0, 19.0, 24.0],
         View::Claude | View::Controls | View::Legion | View::Weather => [20.0, 34.0, 20.0, 14.0],
         _ => [16.0, NAV_H + 8.0, 16.0, 12.0],
     }
 }
 
-/// Size of the open notch for a tab. The Claude tab grows with its sessions, the others are fixed.
-fn open_size(view: View, claude_height: f32) -> (f32, f32) {
+/// Size of the open notch for a tab. The Claude tab grows with its sessions and the mixer with its
+/// rows; the others are fixed.
+fn open_size(view: View, wanted_height: f32) -> (f32, f32) {
     let (w, h) = view.size();
-    if view == View::Claude { (w, claude_height.clamp(150.0, 420.0)) } else { (w, h) }
+    match view {
+        View::Claude => (w, wanted_height.clamp(150.0, 420.0)),
+        View::Mixer => (w, wanted_height.clamp(mixer::MIN_HEIGHT, mixer::MAX_HEIGHT)),
+        _ => (w, h),
+    }
 }
 
 /// How far the notch has opened: 0 at the collapsed height, 1 at the tab's open height.

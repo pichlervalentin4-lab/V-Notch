@@ -7,10 +7,6 @@ pub fn rounded(radius: f32) -> CornerRadius {
     CornerRadius::same(radius.clamp(0.0, 255.0) as u8)
 }
 
-pub fn card(ui: &Ui, rect: Rect, radius: f32, fill: Color32) {
-    ui.painter().rect_filled(rect, rounded(radius), fill);
-}
-
 /// A texture made once and kept for the whole run: gradients and soft shapes.
 pub(super) fn cached_texture(ctx: &egui::Context, key: &str, make: impl FnOnce() -> egui::ColorImage) -> egui::TextureId {
     let id = egui::Id::new(("v-notch-texture", key));
@@ -187,25 +183,6 @@ pub fn icon_button_fill(ui: &mut Ui, rect: Rect, icon: &str, size: f32, color: C
     }
     ui.painter().text(rect.center(), Align2::CENTER_CENTER, icon, theme::icon_fill(size * scale), color);
     response
-}
-
-/// A horizontal value bar. Returns the new value while the user drags or clicks it.
-pub fn slider(ui: &mut Ui, rect: Rect, value: f32, color: Color32, id: impl std::hash::Hash + std::fmt::Debug) -> Option<f32> {
-    let response = ui.interact(rect.expand2(vec2(0.0, 6.0)), ui.id().with(id), Sense::click_and_drag());
-    let active = response.dragged() || response.is_pointer_button_down_on();
-    let height = if active || response.hovered() { rect.height() + 2.0 } else { rect.height() };
-    let bar = Rect::from_center_size(rect.center(), vec2(rect.width(), height));
-    let radius = rounded(height / 2.0);
-    ui.painter().rect_filled(bar, radius, theme::alpha(Color32::WHITE, 0.16));
-    let filled = bar.width() * value.clamp(0.0, 1.0);
-    if filled > 0.5 {
-        let fill = Rect::from_min_size(bar.min, vec2(filled.max(height), height));
-        ui.painter().rect_filled(fill, radius, color);
-    }
-    if active && let Some(pointer) = response.interact_pointer_pos() {
-        return Some(((pointer.x - rect.left()) / rect.width()).clamp(0.0, 1.0));
-    }
-    None
 }
 
 /// A pill-shaped text button.

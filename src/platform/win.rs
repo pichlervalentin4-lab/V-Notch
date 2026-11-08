@@ -527,6 +527,14 @@ impl AudioBackend {
         }
     }
 
+    pub fn set_mic(&self, level: f32) {
+        if let Some(volume) = self.endpoint_volume(eCapture) {
+            unsafe {
+                let _ = volume.SetMasterVolumeLevelScalar(level.clamp(0.0, 1.0), std::ptr::null());
+            }
+        }
+    }
+
     pub fn set_mic_muted(&self, muted: bool) {
         if let Some(volume) = self.endpoint_volume(eCapture) {
             unsafe {
