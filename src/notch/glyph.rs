@@ -142,6 +142,25 @@ pub fn paint(painter: &egui::Painter, center: Pos2, size: f32, glyph: Glyph, col
     painter.image(texture, rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), color);
 }
 
+/// Same as [`paint`], turned by `angle` radians about its centre.
+pub fn paint_rotated(painter: &egui::Painter, center: Pos2, size: f32, glyph: Glyph, color: Color32, angle: f32) {
+    if angle == 0.0 {
+        paint(painter, center, size, glyph, color);
+        return;
+    }
+    let ppp = painter.ctx().pixels_per_point();
+    let px = (size * ppp).round().max(1.0) as u32;
+    let key = format!("glyph-{}-{px}", glyph.name);
+    let texture = cached_texture(painter.ctx(), &key, || {
+        rasterize(glyph, px).unwrap_or_else(|| egui::ColorImage::filled([1, 1], Color32::TRANSPARENT))
+    });
+    let side = px as f32 / ppp;
+    let mut mesh = egui::Mesh::with_texture(texture);
+    mesh.add_rect_with_uv(Rect::from_center_size(center, vec2(side, side)), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), color);
+    mesh.rotate(egui::emath::Rot2::from_angle(angle), center);
+    painter.add(egui::Shape::mesh(mesh));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

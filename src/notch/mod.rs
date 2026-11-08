@@ -6,6 +6,7 @@ mod controls;
 pub mod glyph;
 pub mod kit;
 mod media;
+mod bubble;
 mod mixer;
 mod shelf;
 mod weather;
@@ -147,7 +148,11 @@ pub struct CursorShare {
     top: AtomicU32,
     right: AtomicU32,
     bottom: AtomicU32,
+    /// The round Claude bubble next to the closed notch, in the same units.
+    bubble: [AtomicU32; 4],
     pub inside: AtomicBool,
+    /// On the bubble: clicks must reach the window, but the notch must not open on hover.
+    pub in_bubble: AtomicBool,
     pub clicked_outside: AtomicBool,
     pub running: AtomicBool,
     /// While open, every click outside counts, so the pointer is watched closely.
@@ -166,6 +171,19 @@ impl CursorShare {
         self.top.store(encode(rect.top()), Ordering::Relaxed);
         self.right.store(encode(rect.right()), Ordering::Relaxed);
         self.bottom.store(encode(rect.bottom()), Ordering::Relaxed);
+    }
+
+    fn set_bubble(&self, rect: Option<Rect>) {
+        let rect = rect.unwrap_or(Rect::from_min_size(pos2(-99_000.0, -99_000.0), vec2(1.0, 1.0)));
+        for (atom, value) in self.bubble.iter().zip([rect.left(), rect.top(), rect.right(), rect.bottom()]) {
+            atom.store(encode(value), Ordering::Relaxed);
+        }
+    }
+
+    fn on_bubble(&self, x: f32, y: f32) -> bool {
+        let (x, y) = (encode(x), encode(y));
+        let [left, top, right, bottom] = [0, 1, 2, 3].map(|i| self.bubble[i].load(Ordering::Relaxed));
+        (left..=right).contains(&x) && (top..=bottom).contains(&y)
     }
 
     #[cfg(test)]
@@ -202,11 +220,12 @@ fn start_cursor_thread(share: Arc<CursorShare>, ctx: egui::Context) {
             let distance = share.distance(x, y);
             interval = cursor_poll_interval(distance, share.expanded.load(Ordering::Relaxed));
             let inside = distance == 0;
-            if share.inside.swap(inside, Ordering::Relaxed) != inside {
+            let in_bubble = !inside && share.on_bubble(x, y);
+            if share.inside.swap(inside, Ordering::Relaxed) != inside || share.in_bubble.swap(in_bubble, Ordering::Relaxed) != in_bubble {
                 ctx.request_repaint();
             }
             let down = platform::primary_button_down();
-            if down && !was_down && !inside {
+            if down && !was_down && !inside && !in_bubble {
                 share.clicked_outside.store(true, Ordering::Relaxed);
                 ctx.request_repaint();
             }
@@ -282,6 +301,8 @@ pub struct Notch {
     swipe: f32,
     swipe_cooldown: f32,
     last_rect: Rect,
+    /// Where the Claude bubble was drawn last frame, if it shows.
+    bubble_rect: Option<Rect>,
     pub textures: Textures,
     pub lyrics_open: bool,
     pub shelf_ui: shelf::ShelfUi,
@@ -330,6 +351,7 @@ impl Notch {
             swipe: 0.0,
             swipe_cooldown: 0.0,
             last_rect: Rect::NOTHING,
+            bubble_rect: None,
             textures: Textures::default(),
             lyrics_open: false,
             shelf_ui: shelf::ShelfUi::default(),
@@ -418,9 +440,9 @@ impl Notch {
             return (w, h, (collapsed_radius + 8.0).min(h / 2.0));
         }
         let hover_grow = 1.0 + 0.04 * self.hover;
-        let width = if activity.media_playing || activity.has_media {
-            (base_w + 50.0).max(280.0) + activity.extra_width
-        } else if activity.extra_width > 0.0 {
+        // With media the pill keeps the notch's own width (230 by default), as in the original: cover on the
+        // left, bars on the right.
+        let width = if activity.media_playing || activity.has_media || activity.extra_width > 0.0 {
             base_w + activity.extra_width
         } else if settings.slim_idle_notch && !settings.enable_dynamic_island_mode {
             IDLE_SLIM_WIDTH.max(base_w * 0.65)
@@ -500,8 +522,13 @@ impl Notch {
         let rect_px = Rect::from_min_max((hit.min.to_vec2() * platform_scale(scale)).to_pos2() + origin, (hit.max.to_vec2() * platform_scale(scale)).to_pos2() + origin);
         self.cursor.set_rect(if full_hide || !visual.is_positive() { Rect::from_min_size(pos2(-99_000.0, -99_000.0), vec2(1.0, 1.0)) } else { rect_px });
         self.cursor.expanded.store(self.expanded, Ordering::Relaxed);
+        let bubble = self.bubble_rect.filter(|_| !full_hide).map(|b| {
+            let b = b.expand(2.0);
+            Rect::from_min_max((b.min.to_vec2() * platform_scale(scale)).to_pos2() + origin, (b.max.to_vec2() * platform_scale(scale)).to_pos2() + origin)
+        });
+        self.cursor.set_bubble(bubble);
 
-        let inside = self.cursor.inside.load(Ordering::Relaxed);
+        let inside = self.cursor.inside.load(Ordering::Relaxed) || self.cursor.in_bubble.load(Ordering::Relaxed);
         let dragging = ctx.input(|i| i.pointer.any_down() && i.pointer.is_decidedly_dragging());
         let hovering_files = ctx.input(|i| !i.raw.hovered_files.is_empty());
         let wanted = !(inside || dragging || hovering_files) || settings.enable_cursor_bypass && !self.expanded;
@@ -577,6 +604,9 @@ impl Notch {
             vec2(self.width.value.max(1.0), self.height.value.max(1.0)),
         );
         self.last_rect = if hidden { Rect::NOTHING } else { rect };
+        if hidden {
+            self.bubble_rect = None;
+        }
 
         if hidden {
             ctx.request_repaint_after(Duration::from_millis(500));
@@ -593,6 +623,7 @@ impl Notch {
             child.multiply_opacity(inner_alpha);
             self.paint_collapsed(&mut child, rect, &settings, &activity);
         }
+        self.paint_claude_bubble(ui, rect, &settings, &activity);
         if self.expanded && self.content > 0.01 {
             let mut child = ui.new_child(UiBuilder::new().max_rect(rect).id_salt("expanded"));
             child.set_clip_rect(rect);
@@ -918,9 +949,6 @@ impl Notch {
         activity.claude_waiting = pending.len() + sessions.iter().filter(|s| s.status == ClaudeStatus::Waiting).count().min(1) * usize::from(pending.is_empty());
         activity.claude_working = sessions.iter().filter(|s| s.status == ClaudeStatus::Working).count();
         activity.claude_busy = activity.claude_waiting > 0 || activity.claude_working > 0;
-        if activity.claude_busy {
-            activity.extra_width += 34.0;
-        }
         if let Ok(system) = self.hub.system.state.lock() {
             activity.mic_active = !system.privacy.mic.is_empty();
             activity.camera_active = !system.privacy.camera.is_empty();
@@ -976,11 +1004,8 @@ impl Notch {
             }
         }
 
-        // Live activities sit between the cover and the bars, as far right as there is room.
-        if activity.claude_busy {
-            paint_claude_orb(ui, pos2(right - 10.0, center_y), activity, time);
-            right -= 26.0;
-        }
+        // Live activities sit between the cover and the bars, as far right as there is room. Claude has its
+        // own round bubble beside the notch (see `paint_claude_bubble`).
         if let Some(left_time) = activity.timer {
             let text = timer::format_left(left_time);
             ui.painter().text(pos2(right, center_y), Align2::RIGHT_CENTER, icons::TIMER, theme::icon(13.0), theme::ORANGE);
@@ -1232,19 +1257,6 @@ fn paint_visualizer(ui: &Ui, center: Pos2, playing: bool, peak: f32, color: Colo
         let x = center.x + (index as f32 - (BARS as f32 - 1.0) / 2.0) * 4.2;
         let bar = Rect::from_center_size(pos2(x, center.y), vec2(2.6, height));
         ui.painter().rect_filled(bar, rounded(1.3), color);
-    }
-}
-
-fn paint_claude_orb(ui: &Ui, center: Pos2, activity: &Activity, time: f64) {
-    let (color, speed) = if activity.claude_waiting > 0 { (theme::ORANGE, 6.0) } else { (Color32::from_rgb(217, 119, 87), 3.0) };
-    let pulse = 0.5 + 0.5 * (time as f32 * speed).sin();
-    ui.painter().circle_filled(center, 6.0 + pulse * 2.0, theme::alpha(color, 0.25));
-    ui.painter().text(center, Align2::CENTER_CENTER, icons::SPARKLE, theme::icon_fill(11.0), color);
-    let total = activity.claude_waiting + activity.claude_working;
-    if total > 1 {
-        let badge = center + vec2(7.0, -6.0);
-        ui.painter().circle_filled(badge, 5.0, color);
-        ui.painter().text(badge, Align2::CENTER_CENTER, total.to_string(), theme::bold(8.0), Color32::BLACK);
     }
 }
 
