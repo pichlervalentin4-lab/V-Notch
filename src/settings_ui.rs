@@ -67,6 +67,9 @@ struct SchoolForm {
     has_token: Option<bool>,
     message: Option<String>,
     login: Option<Arc<std::sync::Mutex<Option<Result<String, String>>>>>,
+    untis_password: String,
+    has_untis_password: Option<bool>,
+    untis_message: Option<String>,
 }
 
 impl SettingsWindow {
@@ -416,6 +419,45 @@ impl SettingsWindow {
         });
         hint(ui, &t("port.settings.moodleSignInHint"));
         if let Some(message) = &form.message {
+            ui.label(RichText::new(message).font(theme::regular(12.0)));
+        }
+        self.untis_settings(ui);
+    }
+
+    /// WebUntis for the school tab: server, school and user, and the password for the secret store.
+    fn untis_settings(&mut self, ui: &mut Ui) {
+        use crate::services::untis;
+        section_gap(ui);
+        heading(ui, &t("port.settings.untis"));
+        text_row(ui, &t("port.settings.untisServer"), &mut self.draft.school_untis_server, "example.webuntis.com");
+        text_row(ui, &t("port.settings.untisSchool"), &mut self.draft.school_untis_school, "School name");
+        text_row(ui, &t("port.settings.untisUser"), &mut self.draft.school_untis_user, "");
+        let hub = self.hub.clone();
+        let form = &mut self.school;
+        let has_password = *form.has_untis_password.get_or_insert_with(|| platform::secret_get(untis::PASSWORD_SECRET).is_some_and(|p| !p.is_empty()));
+        row(ui, &t("port.settings.untisPassword"), |ui| {
+            if has_password && ui.button(t("port.settings.moodleForget")).clicked() {
+                platform::secret_set(untis::PASSWORD_SECRET, "");
+                form.has_untis_password = Some(false);
+                form.untis_message = None;
+                hub.untis.refresh();
+            }
+            let save = ui.add_enabled(!form.untis_password.is_empty(), egui::Button::new(t("port.settings.moodleSave"))).clicked();
+            ui.add(egui::TextEdit::singleline(&mut form.untis_password).password(true).desired_width(170.0));
+            if save {
+                let password = std::mem::take(&mut form.untis_password);
+                if platform::secret_set(untis::PASSWORD_SECRET, &password) {
+                    form.has_untis_password = Some(true);
+                    form.untis_message = Some(t("port.settings.untisSaved"));
+                    hub.untis.refresh();
+                } else {
+                    form.untis_message = Some(t("error.apiKeyEncrypt"));
+                }
+            }
+        });
+        let status = if has_password { t("port.settings.untisHasPassword") } else { t("port.settings.moodleNoToken") };
+        hint(ui, &format!("{status}. {}", t("port.settings.untisHint")));
+        if let Some(message) = &form.untis_message {
             ui.label(RichText::new(message).font(theme::regular(12.0)));
         }
     }

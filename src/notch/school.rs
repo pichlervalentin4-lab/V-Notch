@@ -11,6 +11,7 @@ use super::{Notch, View, glyph};
 use crate::i18n::{t, tf};
 use crate::icons;
 use crate::services::moodle::{Deadline, MoodleStatus, short_course};
+use crate::services::untis::{Exam, UntisStatus};
 use crate::settings::Settings;
 use crate::theme;
 use chrono::{Datelike, Local, Timelike};
@@ -33,6 +34,11 @@ const HERO_STROKE: f32 = 7.0;
 const HERO_SPAN_HOURS: f32 = 14.0 * 24.0;
 /// Rows after the hero, as in the original.
 const MAX_DEADLINES: usize = 4;
+/// Test tiles and timetable changes, as many as the original shows.
+const MAX_EXAMS: usize = 4;
+const MAX_CHANGES: usize = 4;
+/// Tests within this many days glow rosé.
+const EXAM_SOON_DAYS: i64 = 5;
 const ROW_H: f32 = 34.0;
 const ROW_STEP: f32 = 42.0;
 const ACTION_X: f32 = 196.0;
@@ -83,54 +89,136 @@ impl Notch {
             return;
         }
         let status = self.hub.moodle.status.lock().map(|s| s.clone()).unwrap_or_default();
+        let untis = self.hub.untis.status.lock().map(|s| s.clone()).unwrap_or_default();
         let now = Local::now();
+        let today = now.date_naive();
         let open: Vec<Deadline> = match &status {
             MoodleStatus::Ready(list) => list.iter().filter(|d| d.due >= now && !d.overdue).cloned().collect(),
             _ => Vec::new(),
         };
-        let mood = school_mood(open.first().map(|d| hours_left(d, now)));
+        let timetable = match &untis {
+            UntisStatus::Ready(timetable) => Some(timetable.clone()),
+            _ => None,
+        };
+        let exams: Vec<Exam> = timetable.as_ref().map(|t| t.exams.iter().take(MAX_EXAMS).cloned().collect()).unwrap_or_default();
+        // The colour follows whatever comes first: a deadline or a test.
+        let next_deadline = open.first().map(|d| hours_left(d, now));
+        let next_exam = exams.first().map(|e| (e.date.and_time(e.start.unwrap_or_default()) - now.naive_local()).num_minutes() as f32 / 60.0);
+        let soonest = match (next_deadline, next_exam) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        let mood = school_mood(soonest);
         paint_backdrop(ui, notch, mood);
+        if settings.enable_local_only_mode {
+            status_row(ui, body, &t("pi.localOnly"));
+            return;
+        }
 
+        // Everything below scrolls when it does not fit.
+        let scroll_id = ui.id().with("school-scroll");
+        let mut scroll: f32 = ui.ctx().data(|d| d.get_temp(scroll_id)).unwrap_or(0.0);
+        let total: f32 = ui.ctx().data(|d| d.get_temp(scroll_id.with("height"))).unwrap_or(0.0);
+        let overflow = (total - body.height()).max(0.0);
+        if overflow > 0.0 && ui.rect_contains_pointer(body) {
+            scroll -= ui.input(|i| i.smooth_scroll_delta.y);
+        }
+        scroll = scroll.clamp(0.0, overflow);
+        ui.ctx().data_mut(|d| d.insert_temp(scroll_id, scroll));
+        let mut content = ui.new_child(egui::UiBuilder::new().max_rect(body));
+        content.set_clip_rect(body.expand2(vec2(20.0, 0.0)).intersect(ui.clip_rect()));
+        let ui = &mut content;
+        let top = body.top() - scroll;
+        let mut y = top;
+
+        // Moodle: the next deadline big, then the rest.
         let message = match &status {
-            _ if settings.enable_local_only_mode => Some(t("pi.localOnly")),
-            MoodleStatus::NotConfigured => Some(t("port.school.noMoodle")),
+            MoodleStatus::NotConfigured => (timetable.is_none()).then(|| t("port.school.noMoodle")),
             MoodleStatus::NoToken => Some(t("port.school.noToken")),
             MoodleStatus::Loading => Some(t("pi.loading")),
             MoodleStatus::Failed(error) => Some(tf("port.school.failed", &[error])),
             MoodleStatus::Ready(_) => None,
         };
         if let Some(message) = message {
-            status_row(ui, body, &message);
-            return;
-        }
-        let Some(next) = open.first() else {
-            icon_row(ui, body.top() + 4.0, body.left(), icons::CHECK, &t("school.nothingDue"), MUTED, None);
-            return;
-        };
-        self.deadline_hero(ui, body, next, now, mood[0]);
-
-        let mut y = body.top() + HERO_RING + 6.0 + 12.0;
-        if open.len() > 1 {
-            section_title(ui, body.left(), y, &t("school.deadlines"));
-            y += 18.0 + 6.0;
-            for deadline in open.iter().skip(1).take(MAX_DEADLINES) {
-                let left = hours_left(deadline, now);
-                let urgency = if left < 24.0 {
-                    DUE_TODAY
-                } else if left < 72.0 {
-                    DUE_SOON
-                } else {
-                    MUTED
-                };
-                let status = format!("{} · {}", short_course(&deadline.course), due_text(deadline, now));
-                let row = icon_row(ui, y + 4.0, body.left(), icons::CALENDAR_BLANK, &deadline.name, Color32::WHITE, Some((&status, urgency)));
-                link(ui, row, &deadline.url, ("deadline", deadline.id));
+            status_row(ui, Rect::from_min_max(pos2(body.left(), y), body.max), &message);
+            y += 42.0;
+        } else if matches!(status, MoodleStatus::Ready(_)) {
+            if let Some(next) = open.first() {
+                self.deadline_hero(ui, Rect::from_min_max(pos2(body.left(), y), pos2(body.right(), y + HERO_RING)), next, now, mood[0]);
+                y += HERO_RING + 6.0;
+            } else {
+                icon_row(ui, y + 4.0, body.left(), icons::CHECK, &t("school.nothingDue"), MUTED, None);
                 y += ROW_STEP;
-                if y + ROW_H > body.bottom() {
-                    break;
+            }
+            if open.len() > 1 {
+                y += 12.0;
+                section_title(ui, body.left(), y, &t("school.deadlines"));
+                y += 18.0 + 6.0;
+                for deadline in open.iter().skip(1).take(MAX_DEADLINES) {
+                    let left = hours_left(deadline, now);
+                    let urgency = if left < 24.0 {
+                        DUE_TODAY
+                    } else if left < 72.0 {
+                        DUE_SOON
+                    } else {
+                        MUTED
+                    };
+                    let status = format!("{} · {}", short_course(&deadline.course), due_text(deadline, now));
+                    let row = icon_row(ui, y + 4.0, body.left(), icons::CALENDAR_BLANK, &deadline.name, Color32::WHITE, Some((&status, urgency)));
+                    link(ui, row, &deadline.url, ("deadline", deadline.id));
+                    y += ROW_STEP;
                 }
             }
         }
+
+        // Untis: tests and exams as tiles, then lessons that are cancelled or changed.
+        let untis_url = untis_link(settings);
+        match &untis {
+            UntisStatus::NoPassword => {
+                y += 6.0;
+                status_row(ui, Rect::from_min_max(pos2(body.left(), y), body.max), &t("port.school.noUntisPassword"));
+                y += 42.0;
+            }
+            UntisStatus::Failed(error) => {
+                y += 6.0;
+                status_row(ui, Rect::from_min_max(pos2(body.left(), y), body.max), &tf("port.school.untisFailed", &[error]));
+                y += 42.0;
+            }
+            _ => {}
+        }
+        if !exams.is_empty() {
+            y += 12.0;
+            section_title(ui, body.left(), y, &t("school.exams"));
+            y += 18.0 + 6.0;
+            y += exam_tiles(ui, pos2(body.left(), y + 4.0), body.width(), &exams, today, &untis_url) + 8.0;
+        }
+        let changes = timetable.as_ref().map(|t| t.changes.clone()).unwrap_or_default();
+        if !changes.is_empty() {
+            y += 12.0;
+            section_title(ui, body.left(), y, &t("port.school.timetable"));
+            y += 18.0 + 6.0;
+            for (index, change) in changes.iter().take(MAX_CHANGES).enumerate() {
+                let when = format!(
+                    "{} {}.{}.{}",
+                    weekday_short(change.date.weekday()),
+                    change.date.day(),
+                    change.date.month(),
+                    change.start.map(|s| format!(" · {:02}:{:02}", s.hour(), s.minute())).unwrap_or_default()
+                );
+                let name = if change.subject.is_empty() { when.clone() } else { format!("{} · {when}", change.subject) };
+                let (text, tint) = if change.cancelled {
+                    (t("port.school.cancelled"), DUE_TODAY)
+                } else if change.note.is_empty() {
+                    (t("port.school.changed"), DUE_SOON)
+                } else {
+                    (change.note.clone(), DUE_SOON)
+                };
+                let row = icon_row(ui, y + 4.0, body.left(), icons::CALENDAR_BLANK, &name, Color32::WHITE, Some((&text, tint)));
+                link(ui, row, &untis_url, ("change", index));
+                y += ROW_STEP;
+            }
+        }
+        ui.ctx().data_mut(|d| d.insert_temp(scroll_id.with("height"), y - top));
     }
 
     /// The next deadline, big: a ring that empties as the due date comes closer with the days (or hours)
@@ -168,6 +256,57 @@ impl Notch {
         text_clipped(ui, pos2(x, center.y + 12.0), Align2::LEFT_CENTER, &meta, theme::bold(12.0), lerp_color(mood, Color32::WHITE, 0.35), width);
         link(ui, title.union(Rect::from_center_size(center, vec2(HERO_RING, HERO_RING))), &deadline.url, ("hero-link", deadline.id));
     }
+}
+
+/// The school's WebUntis in the browser; empty without a server.
+fn untis_link(settings: &Settings) -> String {
+    let server = settings.school_untis_server.trim().trim_start_matches("https://").trim_start_matches("http://");
+    let server = server.split('/').next().unwrap_or_default();
+    if server.is_empty() {
+        String::new()
+    } else {
+        format!("https://{server}/WebUntis/?school={}", crate::services::http::encode(settings.school_untis_school.trim()))
+    }
+}
+
+/// "Mi 12.11. · heute", "Fr 14.11. · in 3 T", "Mo 24.11.".
+fn exam_when(exam: &Exam, today: chrono::NaiveDate) -> (String, bool) {
+    let days = (exam.date - today).num_days();
+    let soon = days <= EXAM_SOON_DAYS;
+    let mut when = format!("{} {}.{}.", weekday_short(exam.date.weekday()), exam.date.day(), exam.date.month());
+    if days == 0 {
+        when = format!("{when} · {}", t("school.today"));
+    } else if soon {
+        when = format!("{when} · {}", tf("school.inDaysShort", &[&days.to_string()]));
+    }
+    (when, soon)
+}
+
+/// The original's row of test tiles: date (rosé within five days), subject big, kind below.
+/// Returns the height used.
+fn exam_tiles(ui: &mut Ui, origin: egui::Pos2, width: f32, exams: &[Exam], today: chrono::NaiveDate, url: &str) -> f32 {
+    const GAP: f32 = 8.0;
+    const HEIGHT: f32 = 62.0;
+    let tile_w = (width - GAP * (MAX_EXAMS as f32 - 1.0)) / MAX_EXAMS as f32;
+    for (index, exam) in exams.iter().enumerate() {
+        let rect = Rect::from_min_size(origin + vec2(index as f32 * (tile_w + GAP), 0.0), vec2(tile_w, HEIGHT));
+        let response = ui.interact(rect, ui.id().with(("exam", index)), Sense::click());
+        let hover = ui.ctx().animate_bool_with_time(response.id.with("hover"), response.hovered(), 0.15);
+        let (when, soon) = exam_when(exam, today);
+        let fill = if soon { theme::alpha(DUE_TODAY, 0.18) } else { theme::alpha(Color32::WHITE, 0.059) };
+        let fill = lerp_color(fill, theme::alpha(Color32::WHITE, 0.11), hover * 0.6);
+        ui.painter().rect_filled(rect.expand(hover), super::kit::rounded(12.0), fill);
+        let x = rect.left() + 11.0;
+        let inner = tile_w - 22.0;
+        text_clipped(ui, pos2(x, rect.top() + 15.0), Align2::LEFT_CENTER, &when, theme::bold(10.5), if soon { DUE_TODAY } else { MUTED }, inner);
+        text_clipped(ui, pos2(x, rect.top() + 33.0), Align2::LEFT_CENTER, &exam.subject, theme::bold(14.0), Color32::WHITE, inner);
+        text_clipped(ui, pos2(x, rect.top() + 50.0), Align2::LEFT_CENTER, &exam.kind, theme::bold(10.5), MUTED, inner);
+        let response = if exam.title.is_empty() { response } else { response.on_hover_text(&exam.title) };
+        if response.clicked() && !url.is_empty() {
+            let _ = open::that_detached(url);
+        }
+    }
+    HEIGHT
 }
 
 /// Opens Moodle's page of the item on a click.
@@ -259,6 +398,25 @@ mod tests {
         assert!(due_text(&due_in(3, now), now).starts_with("Today"));
         assert!(due_text(&due_in(24, now), now).starts_with("Tomorrow"));
         assert_eq!(due_text(&due_in(24 * 4, now), now), "In 4 days");
+    }
+
+    #[test]
+    fn exam_dates() {
+        crate::i18n::set_language("en");
+        let today = chrono::NaiveDate::from_ymd_opt(2030, 3, 4).unwrap();
+        let exam = |days| Exam { date: today + chrono::Duration::days(days), start: None, subject: "AM".into(), kind: "Test".into(), title: String::new() };
+        assert_eq!(exam_when(&exam(0), today), ("Mon 4.3. · today".to_string(), true));
+        assert_eq!(exam_when(&exam(3), today).0, "Thu 7.3. · in 3 d");
+        assert_eq!(exam_when(&exam(9), today), ("Wed 13.3.".to_string(), false));
+    }
+
+    #[test]
+    fn untis_link_from_the_settings() {
+        let mut settings = Settings::default();
+        assert_eq!(untis_link(&settings), "");
+        settings.school_untis_server = "https://example.webuntis.com/".into();
+        settings.school_untis_school = "Example School".into();
+        assert_eq!(untis_link(&settings), "https://example.webuntis.com/WebUntis/?school=Example%20School");
     }
 
     #[test]

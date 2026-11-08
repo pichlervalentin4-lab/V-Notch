@@ -91,5 +91,18 @@
   "school.days": "Tage",
   "school.hours": "Std.",
   "school.today": "heute",
-  "school.inDaysShort": "in {0} T"
+  "school.inDaysShort": "in {0} T",
+  "port.school.timetable": "Stundenplan",
+  "port.school.cancelled": "entfällt",
+  "port.school.changed": "geändert",
+  "port.school.noUntisPassword": "Untis: kein Passwort gespeichert – in den Einstellungen unter Tabs eintragen",
+  "port.school.untisFailed": "Untis: {0}",
+  "port.settings.untis": "Schule (WebUntis)",
+  "port.settings.untisServer": "Untis-Server",
+  "port.settings.untisSchool": "Schule (Login-Name)",
+  "port.settings.untisUser": "Benutzername",
+  "port.settings.untisPassword": "Passwort",
+  "port.settings.untisHasPassword": "Passwort gespeichert (verschlüsselt)",
+  "port.settings.untisSaved": "Gespeichert. Der Schule-Tab liest jetzt Untis.",
+  "port.settings.untisHint": "Server und Schule wie in der Adresse der Untis-Anmeldeseite deiner Schule. Untis kennt kein Token, deshalb wird das Passwort verschlüsselt gespeichert; Konten, die sich nur mit Microsoft anmelden, gehen nicht."
 }

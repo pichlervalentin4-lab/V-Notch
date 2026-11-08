@@ -137,6 +137,10 @@ pub struct Settings {
     pub pi_dashboard_url: String,
     /// The school's Moodle, e.g. https://moodle.example.at. Its token lives in the secret store.
     pub school_moodle_url: String,
+    /// WebUntis server (e.g. example.webuntis.com), school login name and user; the password lives in the secret store.
+    pub school_untis_server: String,
+    pub school_untis_school: String,
+    pub school_untis_user: String,
     pub battery_device_id: String,
 }
 
@@ -251,6 +255,9 @@ impl Default for Settings {
             camera_device: String::new(),
             pi_dashboard_url: String::new(),
             school_moodle_url: String::new(),
+            school_untis_server: String::new(),
+            school_untis_school: String::new(),
+            school_untis_user: String::new(),
             battery_device_id: String::new(),
         }
     }

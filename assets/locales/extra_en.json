@@ -91,5 +91,18 @@
   "school.days": "days",
   "school.hours": "hours",
   "school.today": "today",
-  "school.inDaysShort": "in {0} d"
+  "school.inDaysShort": "in {0} d",
+  "port.school.timetable": "Timetable",
+  "port.school.cancelled": "cancelled",
+  "port.school.changed": "changed",
+  "port.school.noUntisPassword": "Untis: no password saved – add it in the settings under Tabs",
+  "port.school.untisFailed": "Untis: {0}",
+  "port.settings.untis": "School (WebUntis)",
+  "port.settings.untisServer": "Untis server",
+  "port.settings.untisSchool": "School (login name)",
+  "port.settings.untisUser": "User name",
+  "port.settings.untisPassword": "Password",
+  "port.settings.untisHasPassword": "Password saved (encrypted)",
+  "port.settings.untisSaved": "Saved. The school tab reads Untis now.",
+  "port.settings.untisHint": "Server and school as in the address of your school's Untis login page. Untis has no token, so the password is kept encrypted to sign in; accounts that only sign in with Microsoft do not work."
 }
