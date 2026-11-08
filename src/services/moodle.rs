@@ -120,6 +120,10 @@ impl MoodleService {
             let result = if is_ical { upcoming_from_ical(&secret) } else { upcoming(&base, &secret) };
             match result {
                 Ok(list) => {
+                    if forced {
+                        // Only the count, never the link or the names.
+                        crate::vlog!("MOODLE", "{} upcoming deadline(s) from the {}", list.len(), if is_ical { "calendar" } else { "web service" });
+                    }
                     self.set(MoodleStatus::Ready(Arc::new(list)));
                     next = Some(Instant::now() + if is_ical { REFRESH_ICAL } else { REFRESH });
                 }
