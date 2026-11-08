@@ -8,6 +8,7 @@ pub mod kit;
 mod media;
 mod bubble;
 mod mixer;
+mod school;
 mod shelf;
 mod weather;
 
@@ -51,6 +52,10 @@ pub enum View {
     Legion,
     Mixer,
     Camera,
+    /// The original's home tab, fed by its Raspberry Pi dashboard.
+    Home,
+    /// The original's school tab: deadlines, tests and to-dos.
+    School,
 }
 
 impl View {
@@ -64,6 +69,8 @@ impl View {
             View::Legion => "Legion",
             View::Mixer => "AudioMixer",
             View::Camera => "Camera",
+            View::Home => "Pi",
+            View::School => "School",
         }
     }
 
@@ -77,6 +84,8 @@ impl View {
             "Legion" => View::Legion,
             "AudioMixer" => View::Mixer,
             "Camera" => View::Camera,
+            "Pi" => View::Home,
+            "School" => View::School,
             _ => return None,
         })
     }
@@ -92,6 +101,8 @@ impl View {
             View::Legion => icons::GAUGE,
             View::Mixer => icons::SPEAKER_HIGH,
             View::Camera => icons::CAMERA,
+            View::Home => icons::LIGHTBULB,
+            View::School => icons::CALENDAR,
         }
     }
 
@@ -105,6 +116,8 @@ impl View {
             View::Weather => glyph::WEATHER,
             View::Mixer => glyph::SPEAKER,
             View::Camera => glyph::CAMERA,
+            View::Home => glyph::PI_HOME,
+            View::School => glyph::SCHOOL,
         }
     }
 
@@ -118,6 +131,8 @@ impl View {
             View::Legion => "port.nav.legion",
             View::Mixer => "nav.audio",
             View::Camera => "nav.camera",
+            View::Home => "port.nav.home",
+            View::School => "port.nav.school",
         }
     }
 
@@ -126,7 +141,7 @@ impl View {
         match self {
             View::Media => (480.0, 147.0),
             View::Shelf => (920.0, 268.0),
-            View::Controls | View::Legion => (720.0, 378.0),
+            View::Controls | View::Legion | View::Home | View::School => (720.0, 378.0),
             View::Claude => (720.0, 400.0),
             View::Weather => (720.0, 372.0),
             View::Mixer => (720.0, 378.0),
@@ -661,7 +676,7 @@ impl Notch {
                 // The clock's second hand sweeps, as the original's (33 ms).
                 View::Media => (ms(33), "media tab"),
                 // The colour fields drift at 24 frames a second, like the original's.
-                View::Controls | View::Legion => (ms(42), "controls tab"),
+                View::Controls | View::Legion | View::Home | View::School => (ms(42), "controls tab"),
                 View::Mixer => (ms(50), "mixer tab"),
                 View::Weather => (ms(40), "weather tab"),
                 _ => (ms(250), "other tab"),
@@ -1144,6 +1159,7 @@ impl Notch {
             View::Weather => self.weather_view(&mut child, body, settings),
             View::Mixer => self.mixer_view(&mut child, body),
             View::Camera => self.camera_view(&mut child, body, settings),
+            View::Home | View::School => self.pi_view(&mut child, body, rect, settings),
         }
     }
 }
@@ -1159,7 +1175,7 @@ fn content_margins(view: View) -> [f32; 4] {
         View::Shelf => [16.0, 0.0, 16.0, 16.0],
         // The original's 682 px mixer list, centred in the 720 px notch.
         View::Mixer => [19.0, 37.0, 19.0, 24.0],
-        View::Claude | View::Controls | View::Legion | View::Weather => [20.0, 34.0, 20.0, 14.0],
+        View::Claude | View::Controls | View::Legion | View::Weather | View::Home | View::School => [20.0, 34.0, 20.0, 14.0],
     }
 }
 
@@ -1306,10 +1322,11 @@ mod tests {
 
     #[test]
     fn view_tokens_round_trip() {
-        for view in [View::Media, View::Shelf, View::Controls, View::Claude, View::Weather, View::Legion, View::Mixer, View::Camera] {
+        for view in [View::Media, View::Shelf, View::Controls, View::Claude, View::Weather, View::Legion, View::Mixer, View::Camera, View::Home, View::School] {
             assert_eq!(View::from_token(view.token()), Some(view));
         }
-        assert_eq!(View::from_token("Pi"), None);
+        assert_eq!(View::from_token("Pi"), Some(View::Home), "the original's home tab");
+        assert_eq!(View::from_token("Spotify"), None);
     }
 
     #[test]
@@ -1337,7 +1354,7 @@ mod tests {
 
     #[test]
     fn all_views_fit_in_the_window() {
-        for view in [View::Media, View::Shelf, View::Controls, View::Claude, View::Weather, View::Legion, View::Mixer, View::Camera] {
+        for view in [View::Media, View::Shelf, View::Controls, View::Claude, View::Weather, View::Legion, View::Mixer, View::Camera, View::Home, View::School] {
             let (w, h) = view.size();
             assert!(w + 40.0 <= WINDOW_W, "{view:?} too wide");
             assert!(h + ISLAND_TOP + 40.0 <= WINDOW_H, "{view:?} too tall");

@@ -4,10 +4,10 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
-pub const CURRENT_VERSION: i32 = 1;
+pub const CURRENT_VERSION: i32 = 2;
 
 /// Order and tokens of the tabs in the notch. "Secondary" is the shelf and clipboard, "Timer" the controls page.
-pub const DEFAULT_TABS: &str = "Media,Secondary,Timer,Claude,Weather,Legion,AudioMixer,Camera";
+pub const DEFAULT_TABS: &str = "Media,Secondary,Timer,Claude,Pi,School,Weather,Legion,AudioMixer,Camera";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -131,6 +131,10 @@ pub struct Settings {
 
     // Devices
     pub camera_device: String,
+
+    // School and home tabs
+    /// The original's Raspberry Pi dashboard (e.g. http://100.x.y.z:4000 over Tailscale); empty hides its data.
+    pub pi_dashboard_url: String,
     pub battery_device_id: String,
 }
 
@@ -243,9 +247,24 @@ impl Default for Settings {
             include_prerelease_updates: false,
 
             camera_device: String::new(),
+            pi_dashboard_url: String::new(),
             battery_device_id: String::new(),
         }
     }
+}
+
+/// Puts `new` (comma-separated tokens) right after `anchor` in a tab list, or at its end; tokens
+/// already in the list stay where they are.
+fn insert_after(list: &str, anchor: &str, new: &str) -> String {
+    let mut tokens: Vec<String> = list.split(',').map(str::trim).filter(|t| !t.is_empty()).map(str::to_string).collect();
+    let mut at = tokens.iter().position(|t| t == anchor).map_or(tokens.len(), |i| i + 1);
+    for token in new.split(',') {
+        if !tokens.iter().any(|t| t == token) {
+            tokens.insert(at, token.to_string());
+            at += 1;
+        }
+    }
+    tokens.join(",")
 }
 
 impl Settings {
@@ -278,6 +297,11 @@ impl Settings {
         }
         if !matches!(self.clock_page_style.as_str(), "analog" | "digital" | "word") {
             self.clock_page_style = fallback.clock_page_style;
+        }
+        // Version 2 brought the original's home and school tabs: show them after Claude, as there.
+        if self.settings_version < 2 {
+            self.nav_tab_order = insert_after(&self.nav_tab_order, "Claude", "Pi,School");
+            self.visible_nav_tabs = insert_after(&self.visible_nav_tabs, "Claude", "Pi,School");
         }
         // Tabs of a removed feature, or tabs from an older file, must not break the bar.
         let known = |token: &str| DEFAULT_TABS.split(',').any(|t| t == token);
@@ -398,11 +422,12 @@ mod tests {
     }
 
     #[test]
-    fn pi_tab_from_the_original_is_dropped_and_missing_tabs_return() {
-        let mut settings = Settings { nav_tab_order: "Pi,Media".into(), visible_nav_tabs: "Pi,Media".into(), ..Default::default() };
+    fn unknown_tabs_are_dropped_and_missing_tabs_return() {
+        let mut settings = Settings { nav_tab_order: "Spotify,Media".into(), visible_nav_tabs: "Spotify,Media".into(), ..Default::default() };
         settings.sanitize();
         assert!(settings.nav_tab_order.starts_with("Media,"));
-        assert!(!settings.nav_tab_order.contains("Pi"));
+        assert!(!settings.nav_tab_order.contains("Spotify"));
+        assert!(settings.nav_tab_order.contains("Pi,School"));
         assert!(settings.nav_tab_order.contains("Weather"));
         assert_eq!(settings.visible_nav_tabs, "Media");
     }

@@ -92,6 +92,16 @@ pub const PLAY: Glyph = Glyph::new(
     "play",
     r##"<path transform="scale(1.894,1)" fill="#fff" d="M9.629,44.68c-1.154,1.16-2.895,1.51-4.407,0.885c-1.513-0.623-2.5-2.1-2.5-3.735V4.043c0-1.637,0.987-3.112,2.5-3.736c1.513-0.625,3.253-0.275,4.407,0.885l17.862,17.951c2.088,2.098,2.088,5.488,0,7.585L9.629,44.68z"/>"##,
 );
+/// The original's PiGlyph: an outlined house with a signal inside, for the home tab.
+pub const PI_HOME: Glyph = Glyph::new(
+    "pi-home",
+    "M10,1.8 L18.6,9 L17,9 L17,17.8 L3,17.8 L3,9 L1.4,9 Z M10,4.4 L15.2,8.8 L15.2,16 L4.8,16 L4.8,8.8 Z M8.9,13.6 A1.1,1.1 0 1 1 11.1,13.6 A1.1,1.1 0 1 1 8.9,13.6 Z M7.45,11.05 A3.6,3.6 0 0 1 12.55,11.05 L11.56,12.04 A2.2,2.2 0 0 0 8.44,12.04 Z",
+);
+/// The original's SchoolGlyph: a graduation cap with its tassel, for the school tab.
+pub const SCHOOL: Glyph = Glyph::new(
+    "school",
+    "M10,2.6 L19.4,7.4 L10,12.2 L0.6,7.4 Z M4.6,9.8 L10,12.6 L15.4,9.8 L15.4,13.4 C15.4,15.2 13,16.6 10,16.6 C7,16.6 4.6,15.2 4.6,13.4 Z M17.3,8.4 L18.3,7.9 L18.3,13.3 A0.95,0.95 0 1 1 17.3,13.3 Z",
+);
 pub const PAUSE: Glyph = Glyph::new(
     "pause",
     r##"<path transform="scale(1.4,1)" fill="#fff" d="M172,3605 C171.448,3605 171,3605.448 171,3606 L171,3612 C171,3612.552 171.448,3613 172,3613 C172.552,3613 173,3612.552 173,3612 L173,3606 C173,3605.448 172.552,3605 172,3605 M177,3606 L177,3612 C177,3612.552 176.552,3613 176,3613 C175.448,3613 175,3612.552 175,3612 L175,3606 C175,3605.448 175.448,3605 176,3605 C176.552,3605 177,3605.448 177,3606"/>"##,
@@ -171,7 +181,7 @@ mod tests {
 
     #[test]
     fn every_glyph_draws_something() {
-        for glyph in [HOME, TRAY, TOGGLES, CLAUDE, WEATHER, SPEAKER, CAMERA, CAMERA_LENS, WARNING, GEAR, BOLT] {
+        for glyph in [HOME, PI_HOME, SCHOOL, TRAY, TOGGLES, CLAUDE, WEATHER, SPEAKER, CAMERA, CAMERA_LENS, WARNING, GEAR, BOLT] {
             let image = rasterize(glyph, 32).unwrap_or_else(|| panic!("{} did not parse", glyph.name));
             let ink = image.pixels.iter().filter(|p| p.a() > 128).count();
             assert!(ink > 60, "{} has only {ink} solid pixels", glyph.name);

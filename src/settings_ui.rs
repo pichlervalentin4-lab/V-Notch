@@ -314,6 +314,9 @@ impl SettingsWindow {
             s.nav_tab_order = DEFAULT_TABS.into();
             s.visible_nav_tabs = DEFAULT_TABS.into();
         }
+        ui.add_space(12.0);
+        text_row(ui, &t("port.settings.piUrl"), &mut s.pi_dashboard_url, "http://100.x.y.z:4000");
+        ui.label(RichText::new(t("port.settings.piUrlHint")).font(theme::regular(11.5)).color(theme::DIM));
     }
 
     fn devices(&mut self, ui: &mut Ui) {

@@ -490,7 +490,7 @@ fn combo(ui: &mut Ui, rect: Rect, icon: Option<&str>, label: &str, clear: bool, 
 /// Three soft colour fields drifting slowly behind the tab, as the original's MoodBackdrop: radial
 /// gradients (strength at the centre, 55 % of it halfway out, nothing at the rim) on a 720 × 400
 /// canvas centred on the notch.
-fn paint_backdrop(ui: &Ui, notch: Rect, colors: [Color32; 3]) {
+pub(super) fn paint_backdrop(ui: &Ui, notch: Rect, colors: [Color32; 3]) {
     use eframe::egui::epaint::{Mesh, Vertex};
     let time = ui.input(|i| i.time) as f32;
     let canvas = pos2(notch.center().x - 360.0, notch.top());

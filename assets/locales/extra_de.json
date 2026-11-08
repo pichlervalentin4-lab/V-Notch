@@ -62,5 +62,10 @@
   "port.settings.targetCurrency": "Zielwährung",
   "port.settings.ignoreFullscreen": "Nicht in Vollbild-Apps",
   "port.settings.excludedApps": "Ausgeschlossene Apps (mit ; getrennt)",
-  "port.settings.backupHint": "Die Datei heißt v-notch-settings.json und liegt im Download-Ordner. API-Schlüssel sind nicht enthalten."
+  "port.settings.backupHint": "Die Datei heißt v-notch-settings.json und liegt im Download-Ordner. API-Schlüssel sind nicht enthalten.",
+  "port.nav.home": "Zuhause",
+  "port.nav.school": "Schule",
+  "port.settings.piUrl": "Pi-Dashboard-Adresse",
+  "port.settings.piUrlHint": "Nur für das Raspberry-Pi-Dashboard des Originals (Tab Zuhause).",
+  "port.pi.unsupported": "Das Pi-Dashboard liest der Port noch nicht"
 }
