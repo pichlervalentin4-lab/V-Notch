@@ -9,6 +9,7 @@ pub mod hotkeys;
 pub mod legion;
 pub mod lyrics;
 pub mod media;
+pub mod moodle;
 pub mod shelf;
 // The original's control center took over the controls tab and hides the focus timer and the
 // ambient sounds; both services stay, unused by the UI for now, so they can come back.
@@ -63,6 +64,7 @@ pub struct Hub {
     pub claude: Arc<claude::Tracker>,
     pub claude_listening: bool,
     pub legion: Arc<legion::LegionService>,
+    pub moodle: Arc<moodle::MoodleService>,
     pub updates: Arc<updates::UpdateService>,
     pub toasts: Shared<VecDeque<Toast>>,
     pub demo: bool,
@@ -91,6 +93,7 @@ impl Hub {
             claude,
             claude_listening,
             legion: legion::LegionService::start(ctx.clone(), demo),
+            moodle: moodle::MoodleService::start(ctx.clone(), settings.clone(), demo),
             updates: updates::UpdateService::new(ctx.clone()),
             toasts,
             demo,

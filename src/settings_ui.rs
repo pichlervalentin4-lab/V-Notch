@@ -53,6 +53,20 @@ pub struct SettingsWindow {
     confirm_reset: bool,
     viewport_id: ViewportId,
     pub clear_history_requested: bool,
+    school: SchoolForm,
+}
+
+/// The Moodle fields of the settings. The token and the password are never part of the settings
+/// file: the token goes to the secret store, the password only into one login request.
+#[derive(Default)]
+struct SchoolForm {
+    token: String,
+    username: String,
+    password: String,
+    /// Whether the secret store holds a token; read once, not every frame.
+    has_token: Option<bool>,
+    message: Option<String>,
+    login: Option<Arc<std::sync::Mutex<Option<Result<String, String>>>>>,
 }
 
 impl SettingsWindow {
@@ -69,6 +83,7 @@ impl SettingsWindow {
             confirm_reset: false,
             viewport_id: ViewportId::from_hash_of("v-notch-settings"),
             clear_history_requested: false,
+            school: SchoolForm::default(),
         }
     }
 
@@ -317,6 +332,92 @@ impl SettingsWindow {
         ui.add_space(12.0);
         text_row(ui, &t("port.settings.piUrl"), &mut s.pi_dashboard_url, "http://100.x.y.z:4000");
         ui.label(RichText::new(t("port.settings.piUrlHint")).font(theme::regular(11.5)).color(theme::DIM));
+        self.school_settings(ui);
+    }
+
+    /// Moodle for the school tab: the address, and a token pasted or fetched with name and password.
+    fn school_settings(&mut self, ui: &mut Ui) {
+        use crate::services::moodle;
+        section_gap(ui);
+        heading(ui, &t("port.settings.moodle"));
+        text_row(ui, &t("port.settings.moodleUrl"), &mut self.draft.school_moodle_url, "https://moodle.example.at");
+        let hub = self.hub.clone();
+        let base = moodle::normalize_base(&self.draft.school_moodle_url);
+        let form = &mut self.school;
+        let has_token = *form.has_token.get_or_insert_with(|| platform::secret_get(moodle::TOKEN_SECRET).is_some_and(|t| !t.is_empty()));
+
+        // A login that finished: keep the token, forget the password.
+        if let Some(pending) = form.login.clone()
+            && let Some(result) = pending.lock().ok().and_then(|mut r| r.take())
+        {
+            form.login = None;
+            form.password.clear();
+            form.message = Some(match result {
+                Ok(token) if platform::secret_set(moodle::TOKEN_SECRET, &token) => {
+                    form.has_token = Some(true);
+                    hub.moodle.refresh();
+                    t("port.settings.moodleSaved")
+                }
+                Ok(_) => t("error.apiKeyEncrypt"),
+                Err(error) => tf("port.school.failed", &[&error]),
+            });
+        }
+
+        let status = if has_token { t("port.settings.moodleHasToken") } else { t("port.settings.moodleNoToken") };
+        row(ui, &t("port.settings.moodleToken"), |ui| {
+            if has_token && ui.button(t("port.settings.moodleForget")).clicked() {
+                platform::secret_set(moodle::TOKEN_SECRET, "");
+                form.has_token = Some(false);
+                form.message = None;
+                hub.moodle.refresh();
+            }
+            ui.label(RichText::new(status).font(theme::regular(12.0)).color(if has_token { theme::GREEN } else { theme::DIM }));
+        });
+        row(ui, &t("port.settings.moodlePaste"), |ui| {
+            let save = ui.add_enabled(!form.token.trim().is_empty(), egui::Button::new(t("port.settings.moodleSave"))).clicked();
+            ui.add(egui::TextEdit::singleline(&mut form.token).password(true).desired_width(200.0));
+            if save {
+                if platform::secret_set(moodle::TOKEN_SECRET, form.token.trim()) {
+                    form.has_token = Some(true);
+                    form.message = Some(t("port.settings.moodleSaved"));
+                    hub.moodle.refresh();
+                } else {
+                    form.message = Some(t("error.apiKeyEncrypt"));
+                }
+                form.token.clear();
+            }
+        });
+        hint(ui, &t("port.settings.moodlePasteHint"));
+        ui.add_space(6.0);
+        row(ui, &t("port.settings.moodleUser"), |ui| {
+            ui.add(egui::TextEdit::singleline(&mut form.username).desired_width(200.0));
+        });
+        let busy = form.login.is_some();
+        row(ui, &t("port.settings.moodlePassword"), |ui| {
+            let ready = !busy && !base.is_empty() && !form.username.trim().is_empty() && !form.password.is_empty();
+            let label = if busy { t("pi.loading") } else { t("port.settings.moodleSignIn") };
+            if ui.add_enabled(ready, egui::Button::new(label)).clicked() {
+                let result = Arc::new(std::sync::Mutex::new(None));
+                form.login = Some(result.clone());
+                form.message = None;
+                let user = form.username.trim().to_string();
+                let password = std::mem::take(&mut form.password);
+                let ctx = ui.ctx().clone();
+                let base = base.clone();
+                std::thread::spawn(move || {
+                    let token = moodle::fetch_token(&base, &user, &password);
+                    if let Ok(mut slot) = result.lock() {
+                        *slot = Some(token);
+                    }
+                    ctx.request_repaint();
+                });
+            }
+            ui.add(egui::TextEdit::singleline(&mut form.password).password(true).desired_width(200.0));
+        });
+        hint(ui, &t("port.settings.moodleSignInHint"));
+        if let Some(message) = &form.message {
+            ui.label(RichText::new(message).font(theme::regular(12.0)));
+        }
     }
 
     fn devices(&mut self, ui: &mut Ui) {

@@ -576,7 +576,7 @@ fn day_rows(ui: &Ui, area: Rect, forecast: &Forecast, fahrenheit: bool) {
     }
 }
 
-fn weekday_short(day: chrono::Weekday) -> String {
+pub(super) fn weekday_short(day: chrono::Weekday) -> String {
     const DAYS: [&str; 7] = ["port.day.mon", "port.day.tue", "port.day.wed", "port.day.thu", "port.day.fri", "port.day.sat", "port.day.sun"];
     t(DAYS[day.num_days_from_monday() as usize]).chars().take(3).collect()
 }

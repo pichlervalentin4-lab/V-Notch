@@ -699,6 +699,7 @@ impl Notch {
         use crate::services::legion::LegionStatus;
         let showing = |view: View| self.expanded && self.view == view;
         self.hub.audio.mixer_visible.store(showing(View::Mixer), Ordering::Relaxed);
+        self.hub.moodle.wanted.store(showing(View::School), Ordering::Relaxed);
         self.hub.system.details_wanted.store(showing(View::Controls), Ordering::Relaxed);
         // The Legion controls live in the controls tab now, as in the original.
         self.hub.legion.visible.store(showing(View::Controls), Ordering::Relaxed);

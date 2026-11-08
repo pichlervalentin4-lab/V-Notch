@@ -135,6 +135,8 @@ pub struct Settings {
     // School and home tabs
     /// The original's Raspberry Pi dashboard (e.g. http://100.x.y.z:4000 over Tailscale); empty hides its data.
     pub pi_dashboard_url: String,
+    /// The school's Moodle, e.g. https://moodle.example.at. Its token lives in the secret store.
+    pub school_moodle_url: String,
     pub battery_device_id: String,
 }
 
@@ -248,6 +250,7 @@ impl Default for Settings {
 
             camera_device: String::new(),
             pi_dashboard_url: String::new(),
+            school_moodle_url: String::new(),
             battery_device_id: String::new(),
         }
     }
