@@ -69,7 +69,7 @@
   "port.settings.piUrlHint": "Only for the original's Raspberry Pi dashboard (home tab).",
   "port.pi.unsupported": "The port does not read the Pi dashboard yet",
   "port.school.noMoodle": "No Moodle address yet – enter it in the settings under Tabs",
-  "port.school.noToken": "Not signed in to Moodle – add a token in the settings under Tabs",
+  "port.school.noToken": "Not connected to Moodle – paste the calendar link in the settings under Tabs",
   "port.school.failed": "Moodle: {0}",
   "port.settings.moodle": "School (Moodle)",
   "port.settings.moodleUrl": "Moodle address",
@@ -108,5 +108,12 @@
   "port.settings.moodleBrowser": "Sign in in the browser",
   "port.settings.moodleBrowserOpen": "Open Moodle sign-in",
   "port.settings.moodleBrowserHint": "Works with the school's Microsoft login too. At the end the browser shows an error page or asks to open the Moodle app: copy the address that starts with “moodlemobile://token=” (address bar, or the developer tools F12 → Console) and paste it above.",
-  "port.settings.moodleBadToken": "That is not a Moodle token or a moodlemobile:// link."
+  "port.settings.moodleBadToken": "That is not a Moodle token or a moodlemobile:// link.",
+  "port.settings.moodleIcal": "Calendar link",
+  "port.settings.moodleHasIcal": "Calendar link saved (encrypted)",
+  "port.settings.moodleIcalPaste": "Paste the calendar link",
+  "port.settings.moodleIcalOpen": "Open Moodle's calendar export",
+  "port.settings.moodleIcalSaved": "Saved. The school tab reads the Moodle calendar now (every 30 minutes).",
+  "port.settings.moodleBadIcal": "That is not a calendar link of Moodle (…/calendar/export_execute.php?…&authtoken=…).",
+  "port.settings.moodleIcalHint": "Works even where the Moodle app is blocked. On the export page choose “All” events and “Recent and next 60 days”, click “Get calendar URL”, copy the link and paste it here. It works like a password: keep it to yourself."
 }

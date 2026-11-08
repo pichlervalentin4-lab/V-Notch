@@ -3,6 +3,10 @@
 //! `login/token.php` with name and password, which are then forgotten. It is kept encrypted in the
 //! platform's secret store, never in the settings file, the log or a URL: every call sends it in
 //! the body of a POST.
+//!
+//! Where the school has switched the Moodle app's web service off, the calendar export works
+//! instead: its link (`calendar/export_execute.php?…&authtoken=…`) is just as secret, so it too lives
+//! only in the secret store, and errors never quote it.
 
 use crate::platform;
 use crate::settings::SharedSettings;
@@ -15,7 +19,10 @@ use std::time::{Duration, Instant};
 
 /// Name of the token in the secret store.
 pub const TOKEN_SECRET: &str = "school.moodle.token";
+/// Name of the calendar export link in the secret store; its authtoken opens the calendar.
+pub const ICAL_SECRET: &str = "school.moodle.ical";
 const REFRESH: Duration = Duration::from_secs(10 * 60);
+const REFRESH_ICAL: Duration = Duration::from_secs(30 * 60);
 const RETRY: Duration = Duration::from_secs(90);
 const TIMEOUT: Duration = Duration::from_secs(20);
 /// How many upcoming events to ask for.
@@ -78,19 +85,30 @@ impl MoodleService {
 
     fn run(&self, settings: &SharedSettings, ctx: &egui::Context) {
         let mut next: Option<Instant> = None;
+        // Whether the secret store holds a calendar link; read again on every forced refresh.
+        let mut has_ical: Option<bool> = None;
         loop {
             std::thread::sleep(Duration::from_millis(500));
-            let base = settings.read(|s| if s.enable_local_only_mode { String::new() } else { normalize_base(&s.school_moodle_url) });
-            if base.is_empty() {
+            let (local_only, base) = settings.read(|s| (s.enable_local_only_mode, normalize_base(&s.school_moodle_url)));
+            let forced = self.refresh_now.swap(false, Ordering::Relaxed);
+            if forced {
+                has_ical = None;
+            }
+            let ical_set = *has_ical.get_or_insert_with(|| platform::secret_get(ICAL_SECRET).is_some_and(|l| !l.is_empty()));
+            if local_only || (base.is_empty() && !ical_set) {
                 self.set(MoodleStatus::NotConfigured);
                 continue;
             }
-            let forced = self.refresh_now.swap(false, Ordering::Relaxed);
             let due = next.is_none_or(|at| Instant::now() >= at);
             if !forced && !(due && self.wanted.load(Ordering::Relaxed)) {
                 continue;
             }
-            let Some(token) = platform::secret_get(TOKEN_SECRET).filter(|t| !t.is_empty()) else {
+            // The calendar link wins: it works where the Moodle app's web service is switched off.
+            let source = match platform::secret_get(ICAL_SECRET).filter(|l| !l.is_empty()) {
+                Some(link) => Some((link, true)),
+                None => platform::secret_get(TOKEN_SECRET).filter(|t| !t.is_empty()).map(|t| (t, false)),
+            };
+            let Some((secret, is_ical)) = source else {
                 self.set(MoodleStatus::NoToken);
                 next = None;
                 continue;
@@ -99,10 +117,11 @@ impl MoodleService {
                 self.set(MoodleStatus::Loading);
                 ctx.request_repaint();
             }
-            match upcoming(&base, &token) {
+            let result = if is_ical { upcoming_from_ical(&secret) } else { upcoming(&base, &secret) };
+            match result {
                 Ok(list) => {
                     self.set(MoodleStatus::Ready(Arc::new(list)));
-                    next = Some(Instant::now() + REFRESH);
+                    next = Some(Instant::now() + if is_ical { REFRESH_ICAL } else { REFRESH });
                 }
                 Err(error) => {
                     crate::vlog!("MOODLE", "refresh failed: {error}");
@@ -245,6 +264,147 @@ pub fn parse_events(reply: &Value) -> Result<Vec<Deadline>, String> {
     Ok(list)
 }
 
+/// "webcal://…" or "https://…/calendar/export_execute.php?…&authtoken=…" → the https link; anything
+/// else is not a calendar export link of Moodle.
+pub fn ical_link_from_input(input: &str) -> Option<String> {
+    let input = input.trim();
+    let link = match input.strip_prefix("webcal://") {
+        Some(rest) => format!("https://{rest}"),
+        None => input.to_string(),
+    };
+    let valid = (link.starts_with("https://") || link.starts_with("http://"))
+        && link.contains("/calendar/export_execute.php?")
+        && link.contains("authtoken=")
+        && !link.chars().any(char::is_whitespace);
+    valid.then_some(link)
+}
+
+/// "https://moodle.school.at/calendar/export_execute.php?…" → "https://moodle.school.at".
+fn ical_base(link: &str) -> &str {
+    link.split_once("/calendar/export_execute.php").map(|(base, _)| base).unwrap_or(link)
+}
+
+/// Moodle's page that makes the calendar link.
+pub fn ical_export_page(base: &str) -> String {
+    format!("{base}/calendar/export.php")
+}
+
+/// Reads the calendar export. The link is a password of its own: no error text carries it.
+pub fn upcoming_from_ical(link: &str) -> Result<Vec<Deadline>, String> {
+    let base = ical_base(link);
+    let host = base.split('/').nth(2).unwrap_or("?").to_string();
+    let mut response = crate::services::http::agent(TIMEOUT)
+        .get(link)
+        .header("User-Agent", concat!("V-Notch-Rust/", env!("CARGO_PKG_VERSION")))
+        .call()
+        .map_err(|e| format!("{host}: {}", scrub(&e.to_string(), link)))?;
+    let status = response.status().as_u16();
+    if !(200..300).contains(&status) {
+        return Err(format!("HTTP {status} from {host}"));
+    }
+    let text = response.body_mut().with_config().limit(4 * 1024 * 1024).read_to_string().map_err(|_| format!("{host} sent no calendar"))?;
+    parse_ics(&text, base, Local::now())
+}
+
+/// Takes the link (and its token) out of an error text, in case the transport quoted it.
+fn scrub(text: &str, link: &str) -> String {
+    let mut text = text.replace(link, "<link>");
+    if let Some(at) = text.find("authtoken") {
+        text.truncate(at);
+        text.push('…');
+    }
+    text
+}
+
+/// The events of an iCalendar file from now on, soonest first. Moodle names the course in
+/// CATEGORIES and puts the due time in DTSTART.
+pub fn parse_ics(text: &str, base: &str, now: DateTime<Local>) -> Result<Vec<Deadline>, String> {
+    if !text.contains("BEGIN:VCALENDAR") {
+        // Moodle answers a wrong or outdated token with an HTML page.
+        return Err("Moodle sent no calendar – the calendar link is not valid (any more)".to_string());
+    }
+    // Long lines go on in lines starting with a space or tab.
+    let unfolded = text.replace("\r\n", "\n").replace("\n ", "").replace("\n\t", "");
+    let mut list = Vec::new();
+    let mut event: Option<Vec<(String, String, String)>> = None;
+    for line in unfolded.lines() {
+        match line.trim_end() {
+            "BEGIN:VEVENT" => event = Some(Vec::new()),
+            "END:VEVENT" => {
+                if let Some(deadline) = event.take().and_then(|props| ics_deadline(&props, base)) {
+                    list.push(deadline);
+                }
+            }
+            line => {
+                if let Some(props) = event.as_mut()
+                    && let Some((head, value)) = line.split_once(':')
+                {
+                    let (name, params) = head.split_once(';').unwrap_or((head, ""));
+                    props.push((name.to_ascii_uppercase(), params.to_ascii_uppercase(), value.to_string()));
+                }
+            }
+        }
+    }
+    list.retain(|d| d.due >= now);
+    list.sort_by_key(|d| d.due);
+    list.truncate(LIMIT as usize);
+    Ok(list)
+}
+
+fn ics_deadline(props: &[(String, String, String)], base: &str) -> Option<Deadline> {
+    let get = |key: &str| props.iter().find(|(name, _, _)| name == key);
+    let (_, params, value) = get("DTSTART").or_else(|| get("DTEND"))?;
+    let due = ics_time(value, params)?;
+    let summary = unescape(&get("SUMMARY")?.2);
+    let course = get("CATEGORIES").map(|(_, _, v)| unescape(v.split(',').next().unwrap_or_default())).unwrap_or_default();
+    let uid = get("UID").map(|(_, _, v)| v.as_str()).unwrap_or_default();
+    // Moodle's UID is "<event id>@<host>"; other calendars get a hash.
+    let id = uid.split('@').next().and_then(|n| n.parse().ok()).unwrap_or_else(|| {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        (uid, &summary, due.timestamp()).hash(&mut hasher);
+        (hasher.finish() >> 1) as i64
+    });
+    let url = get("URL").map(|(_, _, v)| v.clone()).unwrap_or_else(|| format!("{base}/calendar/view.php?view=day&time={}", due.timestamp()));
+    let lower = summary.to_lowercase();
+    let module = if lower.contains("quiz") || lower.contains("test") || lower.ends_with(" closes") || lower.ends_with(" schließt") { "quiz" } else { "assign" };
+    Some(Deadline { id, name: clean_name(&summary), course, due, url, module: module.into(), overdue: false })
+}
+
+/// "20261110T215900Z" (UTC), "20261110T225900" (local) or "20261110" (the end of that day).
+fn ics_time(value: &str, params: &str) -> Option<DateTime<Local>> {
+    use chrono::{NaiveDate, NaiveDateTime, Utc};
+    let value = value.trim();
+    if let Some(utc) = value.strip_suffix('Z') {
+        let naive = NaiveDateTime::parse_from_str(utc, "%Y%m%dT%H%M%S").ok()?;
+        return Some(Utc.from_utc_datetime(&naive).with_timezone(&Local));
+    }
+    if value.len() == 8 || params.contains("VALUE=DATE") && !params.contains("VALUE=DATE-TIME") {
+        let date = NaiveDate::parse_from_str(&value[..8.min(value.len())], "%Y%m%d").ok()?;
+        return Local.from_local_datetime(&date.and_hms_opt(23, 59, 0)?).earliest();
+    }
+    let naive = NaiveDateTime::parse_from_str(value, "%Y%m%dT%H%M%S").ok()?;
+    Local.from_local_datetime(&naive).earliest()
+}
+
+/// iCalendar text escapes: "\," "\;" "\\" "\n".
+fn unescape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n' | 'N') => out.push(' '),
+                Some(other) => out.push(other),
+                None => {}
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out.trim().to_string()
+}
+
 /// Moodle calls an assignment's event "Hausübung 3 is due" / "… ist fällig"; the tab wants the name.
 fn clean_name(name: &str) -> String {
     let name = name.trim();
@@ -283,6 +443,7 @@ fn demo_deadlines() -> Vec<Deadline> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
     use serde_json::json;
 
     #[test]
@@ -327,6 +488,52 @@ mod tests {
         assert_eq!(token_from_input(" 0123456789abcdef0123456789abcdef ").as_deref(), Some("0123456789abcdef0123456789abcdef"));
         assert_eq!(token_from_input("not a token!"), None);
         assert!(browser_login_url("https://moodle.example-school.at").starts_with("https://moodle.example-school.at/admin/tool/mobile/launch.php?service=moodle_mobile_app&passport="));
+    }
+
+    // A made-up export in Moodle's shape: CRLF, a folded line, escapes, one event in the past.
+    const ICS: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Moodle Pty Ltd//NONSGML Moodle Version 2024100700//EN\r\n\
+BEGIN:VEVENT\r\nUID:4711@moodle.example-school.at\r\nSUMMARY:Hausübung 3 ist fällig\r\nDESCRIPTION:Bitte als PDF\\, danke\r\n\
+CLASS:PUBLIC\r\nLAST-MODIFIED:20261101T100000Z\r\nDTSTAMP:20261101T100000Z\r\nDTSTART:20261110T215900Z\r\nDTEND:20261110T215900Z\r\n\
+CATEGORIES:DBI 3AHIT\r\nEND:VEVENT\r\n\
+BEGIN:VEVENT\r\nUID:4712@moodle.example-school.at\r\nSUMMARY:Quiz Kapitel 2 - Rekursion und It\r\n eration schließt\r\n\
+DTSTART:20261109T120000Z\r\nCATEGORIES:POS 3AHIT\r\nEND:VEVENT\r\n\
+BEGIN:VEVENT\r\nUID:4700@moodle.example-school.at\r\nSUMMARY:Alte Abgabe ist fällig\r\nDTSTART:20261001T080000Z\r\nCATEGORIES:NW\r\nEND:VEVENT\r\n\
+BEGIN:VEVENT\r\nUID:x@other\r\nSUMMARY:Projekttag\r\nDTSTART;VALUE=DATE:20261120\r\nEND:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    #[test]
+    fn calendar_export_becomes_deadlines() {
+        let now = Utc.with_ymd_and_hms(2026, 11, 8, 20, 0, 0).unwrap().with_timezone(&Local);
+        let list = parse_ics(ICS, "https://moodle.example-school.at", now).unwrap();
+        assert_eq!(list.len(), 3, "the past event is left out");
+        assert_eq!(list[0].name, "Quiz Kapitel 2 - Rekursion und Iteration");
+        assert_eq!(list[0].course, "POS 3AHIT");
+        assert_eq!(list[0].module, "quiz");
+        assert_eq!(list[0].id, 4712);
+        assert_eq!(list[0].due.timestamp(), Utc.with_ymd_and_hms(2026, 11, 9, 12, 0, 0).unwrap().timestamp());
+        assert_eq!(list[1].name, "Hausübung 3");
+        assert_eq!(list[1].course, "DBI 3AHIT");
+        assert_eq!(list[1].module, "assign");
+        assert_eq!(list[1].url, format!("https://moodle.example-school.at/calendar/view.php?view=day&time={}", list[1].due.timestamp()));
+        assert_eq!(list[2].name, "Projekttag");
+        assert_eq!(list[2].course, "");
+    }
+
+    #[test]
+    fn calendar_errors_and_links() {
+        let now = Local::now();
+        assert!(parse_ics("<html>Login</html>", "https://m.example", now).is_err());
+        assert_eq!(parse_ics("BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n", "https://m.example", now), Ok(Vec::new()));
+        let link = "https://moodle.example-school.at/calendar/export_execute.php?userid=12&authtoken=0123abcd&preset_what=all&preset_time=recentupcoming";
+        assert_eq!(ical_link_from_input(&format!("  {link} ")).as_deref(), Some(link));
+        assert_eq!(ical_link_from_input(&link.replace("https://", "webcal://")).as_deref(), Some(link));
+        assert_eq!(ical_link_from_input("https://moodle.example-school.at/calendar/export.php"), None);
+        assert_eq!(ical_link_from_input("0123456789abcdef"), None);
+        assert_eq!(ical_base(link), "https://moodle.example-school.at");
+        assert_eq!(ical_export_page("https://moodle.example-school.at"), "https://moodle.example-school.at/calendar/export.php");
+        let scrubbed = scrub(&format!("failed to connect to {link}"), link);
+        assert!(!scrubbed.contains("0123abcd") && scrubbed.contains("<link>"));
+        assert!(!scrub("bad uri ...?authtoken=0123abcd", link).contains("0123abcd"));
     }
 
     #[test]

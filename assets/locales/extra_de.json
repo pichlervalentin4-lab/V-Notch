@@ -69,7 +69,7 @@
   "port.settings.piUrlHint": "Nur für das Raspberry-Pi-Dashboard des Originals (Tab Zuhause).",
   "port.pi.unsupported": "Das Pi-Dashboard liest der Port noch nicht",
   "port.school.noMoodle": "Noch keine Moodle-Adresse – in den Einstellungen unter Tabs eintragen",
-  "port.school.noToken": "Nicht bei Moodle angemeldet – Token in den Einstellungen unter Tabs eintragen",
+  "port.school.noToken": "Nicht mit Moodle verbunden – Kalender-Link in den Einstellungen unter Tabs einfügen",
   "port.school.failed": "Moodle: {0}",
   "port.settings.moodle": "Schule (Moodle)",
   "port.settings.moodleUrl": "Moodle-Adresse",
@@ -108,5 +108,12 @@
   "port.settings.moodleBrowser": "Im Browser anmelden",
   "port.settings.moodleBrowserOpen": "Moodle-Anmeldung öffnen",
   "port.settings.moodleBrowserHint": "Geht auch mit dem Microsoft-Login der Schule. Am Ende zeigt der Browser eine Fehlerseite oder will die Moodle-App öffnen: die Adresse kopieren, die mit „moodlemobile://token=“ beginnt (Adressleiste, oder Entwicklertools F12 → Konsole), und oben einfügen.",
-  "port.settings.moodleBadToken": "Das ist weder ein Moodle-Token noch ein moodlemobile://-Link."
+  "port.settings.moodleBadToken": "Das ist weder ein Moodle-Token noch ein moodlemobile://-Link.",
+  "port.settings.moodleIcal": "Kalender-Link",
+  "port.settings.moodleHasIcal": "Kalender-Link gespeichert (verschlüsselt)",
+  "port.settings.moodleIcalPaste": "Kalender-Link einfügen",
+  "port.settings.moodleIcalOpen": "Moodle-Kalenderexport öffnen",
+  "port.settings.moodleIcalSaved": "Gespeichert. Der Schule-Tab liest jetzt den Moodle-Kalender (alle 30 Minuten).",
+  "port.settings.moodleBadIcal": "Das ist kein Kalender-Link von Moodle (…/calendar/export_execute.php?…&authtoken=…).",
+  "port.settings.moodleIcalHint": "Geht auch, wenn die Moodle-App gesperrt ist. Auf der Exportseite „Alle“ Termine und „Letzte und nächste 60 Tage“ wählen, auf „Kalender-URL abfragen“ klicken, den Link kopieren und hier einfügen. Er wirkt wie ein Passwort: nicht weitergeben."
 }

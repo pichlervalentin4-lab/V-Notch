@@ -67,6 +67,10 @@ struct SchoolForm {
     has_token: Option<bool>,
     message: Option<String>,
     login: Option<Arc<std::sync::Mutex<Option<Result<String, String>>>>>,
+    /// The calendar export link while it is being pasted; cleared once saved.
+    ical: String,
+    has_ical: Option<bool>,
+    ical_message: Option<String>,
     untis_password: String,
     has_untis_password: Option<bool>,
     untis_message: Option<String>,
@@ -347,7 +351,47 @@ impl SettingsWindow {
         let hub = self.hub.clone();
         let base = moodle::normalize_base(&self.draft.school_moodle_url);
         let form = &mut self.school;
-        let has_token = *form.has_token.get_or_insert_with(|| platform::secret_get(moodle::TOKEN_SECRET).is_some_and(|t| !t.is_empty()));
+
+        // The calendar export: works where the Moodle app's web service is switched off.
+        let has_ical = *form.has_ical.get_or_insert_with(|| platform::secret_get(moodle::ICAL_SECRET).is_some_and(|l| !l.is_empty()));
+        row(ui, &t("port.settings.moodleIcal"), |ui| {
+            if has_ical && ui.button(t("port.settings.moodleForget")).clicked() {
+                platform::secret_set(moodle::ICAL_SECRET, "");
+                form.has_ical = Some(false);
+                form.ical_message = None;
+                hub.moodle.refresh();
+            }
+            let status = if has_ical { t("port.settings.moodleHasIcal") } else { t("port.settings.moodleNoToken") };
+            ui.label(RichText::new(status).font(theme::regular(12.0)).color(if has_ical { theme::GREEN } else { theme::DIM }));
+        });
+        row(ui, &t("port.settings.moodleIcalPaste"), |ui| {
+            let save = ui.add_enabled(!form.ical.trim().is_empty(), egui::Button::new(t("port.settings.moodleSave"))).clicked();
+            ui.add(egui::TextEdit::singleline(&mut form.ical).password(true).desired_width(200.0));
+            if save {
+                form.ical_message = Some(match moodle::ical_link_from_input(&form.ical) {
+                    Some(link) if platform::secret_set(moodle::ICAL_SECRET, &link) => {
+                        form.has_ical = Some(true);
+                        hub.moodle.refresh();
+                        t("port.settings.moodleIcalSaved")
+                    }
+                    Some(_) => t("error.apiKeyEncrypt"),
+                    None => t("port.settings.moodleBadIcal"),
+                });
+                form.ical.clear();
+            }
+        });
+        row(ui, "", |ui| {
+            if ui.add_enabled(!base.is_empty(), egui::Button::new(t("port.settings.moodleIcalOpen"))).clicked() {
+                let _ = open::that_detached(moodle::ical_export_page(&base));
+            }
+        });
+        hint(ui, &t("port.settings.moodleIcalHint"));
+        if let Some(message) = &form.ical_message {
+            ui.label(RichText::new(message).font(theme::regular(12.0)));
+        }
+        ui.add_space(10.0);
+
+        let has_token =*form.has_token.get_or_insert_with(|| platform::secret_get(moodle::TOKEN_SECRET).is_some_and(|t| !t.is_empty()));
 
         // A login that finished: keep the token, forget the password.
         if let Some(pending) = form.login.clone()
