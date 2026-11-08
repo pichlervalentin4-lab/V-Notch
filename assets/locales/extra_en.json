@@ -79,7 +79,7 @@
   "port.settings.moodleForget": "Remove",
   "port.settings.moodlePaste": "Paste a token",
   "port.settings.moodleSave": "Save",
-  "port.settings.moodlePasteHint": "In Moodle: profile → Preferences → Security keys, the key of “Moodle mobile web service”.",
+  "port.settings.moodlePasteHint": "Paste the token, or the whole “moodlemobile://token=…” link of the browser sign-in below.",
   "port.settings.moodleUser": "Or sign in: user name",
   "port.settings.moodlePassword": "Password",
   "port.settings.moodleSignIn": "Sign in",
@@ -104,5 +104,9 @@
   "port.settings.untisPassword": "Password",
   "port.settings.untisHasPassword": "Password saved (encrypted)",
   "port.settings.untisSaved": "Saved. The school tab reads Untis now.",
-  "port.settings.untisHint": "Server and school as in the address of your school's Untis login page; without a server the school is looked up by name. Untis has no token, so the password is kept encrypted to sign in; accounts that only sign in with Microsoft do not work."
+  "port.settings.untisHint": "Server and school as in the address of your school's Untis login page; without a server the school is looked up by name. Untis has no token, so the password is kept encrypted to sign in; accounts that only sign in with Microsoft do not work.",
+  "port.settings.moodleBrowser": "Sign in in the browser",
+  "port.settings.moodleBrowserOpen": "Open Moodle sign-in",
+  "port.settings.moodleBrowserHint": "Works with the school's Microsoft login too. At the end the browser shows an error page or asks to open the Moodle app: copy the address that starts with “moodlemobile://token=” (address bar, or the developer tools F12 → Console) and paste it above.",
+  "port.settings.moodleBadToken": "That is not a Moodle token or a moodlemobile:// link."
 }

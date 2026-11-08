@@ -380,17 +380,25 @@ impl SettingsWindow {
             let save = ui.add_enabled(!form.token.trim().is_empty(), egui::Button::new(t("port.settings.moodleSave"))).clicked();
             ui.add(egui::TextEdit::singleline(&mut form.token).password(true).desired_width(200.0));
             if save {
-                if platform::secret_set(moodle::TOKEN_SECRET, form.token.trim()) {
-                    form.has_token = Some(true);
-                    form.message = Some(t("port.settings.moodleSaved"));
-                    hub.moodle.refresh();
-                } else {
-                    form.message = Some(t("error.apiKeyEncrypt"));
+                match moodle::token_from_input(&form.token) {
+                    Some(token) if platform::secret_set(moodle::TOKEN_SECRET, &token) => {
+                        form.has_token = Some(true);
+                        form.message = Some(t("port.settings.moodleSaved"));
+                        hub.moodle.refresh();
+                    }
+                    Some(_) => form.message = Some(t("error.apiKeyEncrypt")),
+                    None => form.message = Some(t("port.settings.moodleBadToken")),
                 }
                 form.token.clear();
             }
         });
         hint(ui, &t("port.settings.moodlePasteHint"));
+        row(ui, &t("port.settings.moodleBrowser"), |ui| {
+            if ui.add_enabled(!base.is_empty(), egui::Button::new(t("port.settings.moodleBrowserOpen"))).clicked() {
+                let _ = open::that_detached(moodle::browser_login_url(&base));
+            }
+        });
+        hint(ui, &t("port.settings.moodleBrowserHint"));
         ui.add_space(6.0);
         row(ui, &t("port.settings.moodleUser"), |ui| {
             ui.add(egui::TextEdit::singleline(&mut form.username).desired_width(200.0));

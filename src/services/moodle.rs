@@ -155,6 +155,52 @@ pub fn parse_token(reply: &Value) -> Result<String, String> {
     Err(reply["error"].as_str().unwrap_or("Moodle gave no token").to_string())
 }
 
+/// The page where the Moodle app signs in, also through the school's Microsoft login. At the end the
+/// browser is sent to a `moodlemobile://token=…` link; the user copies that link into the settings.
+pub fn browser_login_url(base: &str) -> String {
+    let passport = (chrono::Utc::now().timestamp_subsec_nanos() % 1_000_000).to_string();
+    format!("{base}/admin/tool/mobile/launch.php?service=moodle_mobile_app&passport={passport}&urlscheme=moodlemobile")
+}
+
+/// What the user pasted: a plain token, or the `moodlemobile://token=…` link of the browser sign-in
+/// (base64 of "signature:::token" or "signature:::token:::privatetoken").
+pub fn token_from_input(input: &str) -> Option<String> {
+    let input = input.trim();
+    let encoded = input.split_once("token=").map(|(_, rest)| rest).unwrap_or(input);
+    let encoded = encoded.trim_end_matches('/');
+    if input.contains("token=") || encoded.len() > 40 {
+        let decoded = base64_decode(encoded)?;
+        let text = String::from_utf8(decoded).ok()?;
+        let token = text.split(":::").nth(1)?.trim().to_string();
+        return (!token.is_empty() && token.chars().all(|c| c.is_ascii_alphanumeric())).then_some(token);
+    }
+    (!input.is_empty() && input.chars().all(|c| c.is_ascii_alphanumeric())).then(|| input.to_string())
+}
+
+fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    let value = |c: u8| -> Option<u32> {
+        Some(match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' | b'-' => 62,
+            b'/' | b'_' => 63,
+            _ => return None,
+        } as u32)
+    };
+    let clean: Vec<u8> = text.bytes().filter(|c| !c.is_ascii_whitespace() && *c != b'=').collect();
+    let mut out = Vec::with_capacity(clean.len() * 3 / 4);
+    for chunk in clean.chunks(4) {
+        let mut buffer = 0u32;
+        for (i, c) in chunk.iter().enumerate() {
+            buffer |= value(*c)? << (18 - 6 * i);
+        }
+        let bytes = [(buffer >> 16) as u8, (buffer >> 8) as u8, buffer as u8];
+        out.extend_from_slice(&bytes[..chunk.len().saturating_sub(1)]);
+    }
+    Some(out)
+}
+
 /// What is due from now on, soonest first.
 pub fn upcoming(base: &str, token: &str) -> Result<Vec<Deadline>, String> {
     let from = chrono::Utc::now().timestamp().to_string();
@@ -271,6 +317,16 @@ mod tests {
     fn token_replies() {
         assert_eq!(parse_token(&json!({ "token": "abc123", "privatetoken": null })), Ok("abc123".into()));
         assert_eq!(parse_token(&json!({ "error": "Invalid login, please try again", "errorcode": "invalidlogin" })), Err("Invalid login, please try again".into()));
+    }
+
+    #[test]
+    fn tokens_from_the_browser_link() {
+        // base64 of "a1b2c3:::0123456789abcdef0123456789abcdef:::private" (made up)
+        let link = "moodlemobile://token=YTFiMmMzOjo6MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY6Ojpwcml2YXRl";
+        assert_eq!(token_from_input(link).as_deref(), Some("0123456789abcdef0123456789abcdef"));
+        assert_eq!(token_from_input(" 0123456789abcdef0123456789abcdef ").as_deref(), Some("0123456789abcdef0123456789abcdef"));
+        assert_eq!(token_from_input("not a token!"), None);
+        assert!(browser_login_url("https://moodle.example-school.at").starts_with("https://moodle.example-school.at/admin/tool/mobile/launch.php?service=moodle_mobile_app&passport="));
     }
 
     #[test]
