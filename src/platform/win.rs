@@ -858,8 +858,22 @@ fn current_ssid() -> Option<String> {
 }
 
 fn radio(kind: RadioKind) -> Option<Radio> {
-    let radios = Radio::GetRadiosAsync().ok()?.join().ok()?;
-    (0..radios.Size().ok()?).filter_map(|i| radios.GetAt(i).ok()).find(|r| r.Kind().ok() == Some(kind))
+    let listed = Radio::GetRadiosAsync()
+        .and_then(|op| op.join())
+        .ok()
+        .and_then(|radios| (0..radios.Size().ok()?).filter_map(|i| radios.GetAt(i).ok()).find(|r| r.Kind().ok() == Some(kind)));
+    listed.or_else(|| radio_fresh(kind))
+}
+
+/// The radio looked up through the device list. After a few switches the process's own radio list
+/// can go stale and stop listing Bluetooth while Windows still has it; this way finds it again.
+fn radio_fresh(kind: RadioKind) -> Option<Radio> {
+    let selector = Radio::GetDeviceSelector().ok()?;
+    let list = DeviceInformation::FindAllAsyncAqsFilter(&selector).ok()?.join().ok()?;
+    (0..list.Size().ok()?)
+        .filter_map(|i| list.GetAt(i).ok())
+        .filter_map(|info| Radio::FromIdAsync(&info.Id().ok()?).ok()?.join().ok())
+        .find(|r| r.Kind().ok() == Some(kind))
 }
 
 pub fn network() -> NetworkInfo {
@@ -1453,4 +1467,5 @@ mod tests {
         assert_eq!(dpapi(&encrypted, false).unwrap(), secret);
     }
 }
+
 

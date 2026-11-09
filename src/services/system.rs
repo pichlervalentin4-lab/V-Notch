@@ -74,6 +74,8 @@ pub struct SystemService {
 
 /// How long the switch shows the wished state after the radio was set, until Windows reports it.
 const SETTLE: Duration = Duration::from_secs(4);
+/// The shortest time between two real switches of the radio.
+const MIN_GAP: Duration = Duration::from_millis(2500);
 /// Readings without a radio that are taken for a radio in the middle of switching.
 const MAX_MISSES: u8 = 3;
 
@@ -294,8 +296,15 @@ impl SystemService {
         }
         let service = self.clone();
         let _ = std::thread::Builder::new().name("bluetooth-switch".into()).spawn(move || {
-            while let Some(on) = service.bluetooth_wish.lock().ok().and_then(|mut wish| wish.next(Instant::now())) {
+            let mut last: Option<Instant> = None;
+            loop {
+                // The driver needs a breather between two switches; clicks meanwhile only change the wish.
+                if let Some(at) = last {
+                    std::thread::sleep(MIN_GAP.saturating_sub(at.elapsed()));
+                }
+                let Some(on) = service.bluetooth_wish.lock().ok().and_then(|mut wish| wish.next(Instant::now())) else { break };
                 platform::set_bluetooth(on);
+                last = Some(Instant::now());
             }
             // Windows takes a moment to report the new state: read again a few times.
             for wait in [300, 700, 1500, 2500] {
