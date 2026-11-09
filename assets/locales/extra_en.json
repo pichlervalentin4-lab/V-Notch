@@ -129,6 +129,7 @@
   "port.settings.teamsHint": "Needs your own app registration at entra.microsoft.com (allow public client flows). Reads your calendar and Teams assignments; only the sign-in is stored, encrypted. Where Microsoft asks for admin approval this only works once the school approves the app – Teams notifications still show as a pill.",
   "port.settings.teamsNeedsAdmin": "The school has to approve the app first (admin consent). Until then the notch shows Teams notifications from Windows as a pill.",
   "port.settings.teamsCancel": "Cancel",
+  "port.bluetooth.tooFast": "Too fast – wait a moment ({0} s)",
   "port.bluetooth.connect": "Connect",
   "port.bluetooth.disconnect": "Disconnect",
   "port.settings.moodleIcal": "Calendar link",

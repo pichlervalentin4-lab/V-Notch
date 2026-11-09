@@ -68,44 +68,65 @@ pub struct SystemService {
     pub details_wanted: AtomicBool,
     /// Set after a radio or device was switched: network and Bluetooth are read again right away.
     pub reread_now: AtomicBool,
-    /// The Bluetooth switch: one switch at a time, and the last wish wins.
+    /// The Bluetooth switch: one switch at a time, and a short lock after it.
     pub bluetooth_wish: Mutex<RadioWish>,
+    /// A Bluetooth reading is running on its own thread (it can hang while the radio switches).
+    bluetooth_reading: Arc<AtomicBool>,
 }
 
 /// How long the switch shows the wished state after the radio was set, until Windows reports it.
 const SETTLE: Duration = Duration::from_secs(4);
-/// The shortest time between two real switches of the radio.
+/// After a switch the switch stays locked this long; clicks meanwhile are ignored.
 const MIN_GAP: Duration = Duration::from_millis(2500);
+/// Longest wait for Windows to switch the radio or list the devices; after it the app goes on.
+const RADIO_TIMEOUT: Duration = Duration::from_secs(8);
+const READ_TIMEOUT: Duration = Duration::from_secs(5);
 /// Readings without a radio that are taken for a radio in the middle of switching.
 const MAX_MISSES: u8 = 3;
 
-/// Clicks on a radio switch while it is still switching: only one switch runs, and what the user
-/// clicked last is applied after it. Keeps the wished state for the switch to show meanwhile.
+/// The Bluetooth switch's state between click and Windows' answer. One switch at a time; a click
+/// while switching or within [`MIN_GAP`] after it is ignored and shows the "too fast" hint.
 #[derive(Debug, Default)]
 pub struct RadioWish {
-    pending: Option<bool>,
     running: bool,
     target: Option<bool>,
-    settled_at: Option<Instant>,
+    done_at: Option<Instant>,
+    /// A click came while locked: the hint shows until the lock ends.
+    rejected: bool,
 }
 
 impl RadioWish {
-    /// Records a wish. True when no switch is running, so the caller starts one.
-    pub fn want(&mut self, on: bool) -> bool {
-        self.pending = Some(on);
+    /// A click. True when it starts a switch; false when the switch is locked.
+    pub fn want(&mut self, on: bool, now: Instant) -> bool {
+        if self.locked_for(now).is_some() {
+            self.rejected = true;
+            return false;
+        }
+        self.running = true;
         self.target = Some(on);
-        self.settled_at = None;
-        !std::mem::replace(&mut self.running, true)
+        self.done_at = None;
+        self.rejected = false;
+        true
     }
 
-    /// The next state to apply; `None` ends the running switch.
-    pub fn next(&mut self, now: Instant) -> Option<bool> {
-        let next = self.pending.take();
-        if next.is_none() {
-            self.running = false;
-            self.settled_at = Some(now);
+    /// The switch returned (or timed out): the lock runs out from now.
+    pub fn done(&mut self, now: Instant) {
+        self.running = false;
+        self.done_at = Some(now);
+    }
+
+    /// How much longer clicks are ignored.
+    pub fn locked_for(&self, now: Instant) -> Option<Duration> {
+        if self.running {
+            return Some(MIN_GAP);
         }
-        next
+        let left = MIN_GAP.saturating_sub(now.duration_since(self.done_at?));
+        (!left.is_zero()).then_some(left)
+    }
+
+    /// The "too fast" hint with the time left, after a click in the lock.
+    pub fn hint(&self, now: Instant) -> Option<Duration> {
+        if self.rejected { self.locked_for(now) } else { None }
     }
 
     /// While switching or settling, the state the switch shows instead of the last reading.
@@ -114,8 +135,21 @@ impl RadioWish {
     }
 
     pub fn busy(&self, now: Instant) -> bool {
-        self.running || self.settled_at.is_some_and(|at| now.duration_since(at) < SETTLE)
+        self.running || self.done_at.is_some_and(|at| now.duration_since(at) < SETTLE)
     }
+}
+
+/// Runs `work` on its own thread and gives up waiting after `timeout`, so a WinRT call that never
+/// returns cannot block the caller. The thread is left to finish on its own.
+fn run_with_timeout<T: Send + 'static>(timeout: Duration, work: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("radio-call".into())
+        .spawn(move || {
+            let _ = sender.send(work());
+        })
+        .ok()?;
+    receiver.recv_timeout(timeout).ok()
 }
 
 /// A reading without a radio right after it was there is Windows in the middle of switching: the
@@ -184,6 +218,7 @@ impl SystemService {
         let service = Arc::new(Self { state: Mutex::new(SystemState::default()), details_wanted: AtomicBool::new(false),
             reread_now: AtomicBool::new(false),
             bluetooth_wish: Mutex::new(RadioWish::default()),
+            bluetooth_reading: Arc::new(AtomicBool::new(false)),
         });
         if demo {
             service.demo_fill();
@@ -249,9 +284,23 @@ impl SystemService {
                 last_slow = Instant::now();
                 next.battery = read_battery();
                 next.network = platform::network();
-                let read = platform::bluetooth();
-                let switching = self.bluetooth_wish.lock().is_ok_and(|w| w.busy(Instant::now()));
-                next.bluetooth = steady_bluetooth(&next.bluetooth, read, switching, &mut bt_misses);
+                // Listing the devices can hang while the radio switches; then the last reading stays
+                // and no second reading starts until the first one is back.
+                if !self.bluetooth_reading.swap(true, Ordering::Relaxed) {
+                    let flag = self.bluetooth_reading.clone();
+                    let read = run_with_timeout(READ_TIMEOUT, move || {
+                        let info = platform::bluetooth();
+                        flag.store(false, Ordering::Relaxed);
+                        info
+                    });
+                    match read {
+                        Some(read) => {
+                            let switching = self.bluetooth_wish.lock().is_ok_and(|w| w.busy(Instant::now()));
+                            next.bluetooth = steady_bluetooth(&next.bluetooth, read, switching, &mut bt_misses);
+                        }
+                        None => crate::vlog!("RADIO", "reading Bluetooth took over {} s", READ_TIMEOUT.as_secs()),
+                    }
+                }
 
                 let notify = settings.read(|s| s.show_system_notifications);
                 if notify && let (Some(now), Some(before)) = (&next.battery, &last_battery)
@@ -287,24 +336,26 @@ impl SystemService {
         }
     }
 
-    /// Switches Bluetooth on or off. Clicks while a switch runs only change what is applied next,
-    /// so fast clicking ends in the state clicked last instead of a pile of half-done switches.
+    /// Switches Bluetooth on or off. A click while a switch runs, or right after one, is ignored
+    /// and shows the "too fast" hint; a switch that never returns gives the switch back after
+    /// [`RADIO_TIMEOUT`].
     pub fn switch_bluetooth(self: &Arc<Self>, on: bool) {
-        let start = self.bluetooth_wish.lock().is_ok_and(|mut wish| wish.want(on));
+        let start = self.bluetooth_wish.lock().is_ok_and(|mut wish| wish.want(on, Instant::now()));
         if !start {
             return;
         }
         let service = self.clone();
         let _ = std::thread::Builder::new().name("bluetooth-switch".into()).spawn(move || {
-            let mut last: Option<Instant> = None;
-            loop {
-                // The driver needs a breather between two switches; clicks meanwhile only change the wish.
-                if let Some(at) = last {
-                    std::thread::sleep(MIN_GAP.saturating_sub(at.elapsed()));
-                }
-                let Some(on) = service.bluetooth_wish.lock().ok().and_then(|mut wish| wish.next(Instant::now())) else { break };
-                platform::set_bluetooth(on);
-                last = Some(Instant::now());
+            let started = Instant::now();
+            let finished = run_with_timeout(RADIO_TIMEOUT, move || platform::set_bluetooth(on)).is_some();
+            let took = started.elapsed().as_millis();
+            if finished {
+                crate::vlog!("RADIO", "Bluetooth {} in {took} ms", if on { "on" } else { "off" });
+            } else {
+                crate::vlog!("RADIO", "switching Bluetooth {} did not return within {took} ms", if on { "on" } else { "off" });
+            }
+            if let Ok(mut wish) = service.bluetooth_wish.lock() {
+                wish.done(Instant::now());
             }
             // Windows takes a moment to report the new state: read again a few times.
             for wait in [300, 700, 1500, 2500] {
@@ -379,22 +430,39 @@ mod tests {
     }
 
     #[test]
-    fn fast_clicks_end_in_the_last_wish() {
+    fn fast_clicks_are_locked_out() {
         let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
         let mut wish = RadioWish::default();
-        assert!(wish.want(false), "the first click starts a switch");
-        assert_eq!(wish.next(t0), Some(false));
-        // Three more clicks while the radio is still switching: none starts a second switch.
-        assert!(!wish.want(true));
-        assert!(!wish.want(false));
-        assert!(!wish.want(true));
-        assert_eq!(wish.shown(t0), Some(true));
-        assert_eq!(wish.next(t0), Some(true), "only the last wish is applied");
-        assert_eq!(wish.next(t0), None);
-        assert!(wish.busy(t0), "the switch shows the wish until Windows reports it");
-        assert_eq!(wish.shown(t0 + Duration::from_secs(1)), Some(true));
-        assert_eq!(wish.shown(t0 + SETTLE + Duration::from_millis(1)), None);
-        assert!(wish.want(false), "after it ended, a click starts a new switch");
+        assert!(wish.want(false, t0), "the first click starts a switch");
+        assert_eq!(wish.hint(t0), None, "no hint for a normal click");
+        // Three more clicks while the radio is still switching: all ignored, the hint shows.
+        assert!(!wish.want(true, ms(100)));
+        assert!(!wish.want(false, ms(200)));
+        assert!(!wish.want(true, ms(300)));
+        assert_eq!(wish.shown(ms(300)), Some(false), "the switch keeps showing the first click");
+        assert_eq!(wish.hint(ms(300)), Some(MIN_GAP));
+        wish.done(ms(400));
+        // Still locked right after the switch, with the time left counting down.
+        assert!(!wish.want(true, ms(1400)));
+        assert_eq!(wish.hint(ms(1400)), Some(Duration::from_millis(1500)));
+        assert!(wish.busy(ms(1400)), "the switch shows the wish until Windows reports it");
+        // After the lock a click works again and the hint is gone.
+        assert_eq!(wish.locked_for(ms(2900)), None);
+        assert!(wish.want(true, ms(2900)));
+        assert_eq!(wish.hint(ms(2900)), None);
+        assert_eq!(wish.shown(ms(2900)), Some(true));
+        wish.done(ms(3000));
+        assert_eq!(wish.shown(ms(3000) + SETTLE), None);
+    }
+
+    #[test]
+    fn a_hanging_call_gives_up_in_time() {
+        let started = Instant::now();
+        let result = run_with_timeout(Duration::from_millis(100), || std::thread::sleep(Duration::from_secs(5)));
+        assert!(result.is_none());
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(run_with_timeout(Duration::from_secs(1), || 7), Some(7));
     }
 
     #[test]

@@ -417,23 +417,39 @@ impl Notch {
         let bluetooth = &state.bluetooth;
         let (rect, _) = ui.allocate_exact_size(vec2(width, ROW_H), Sense::hover());
         // While a switch runs the switch shows what was clicked, not the reading from before.
-        let wished = self.hub.system.bluetooth_wish.lock().ok().and_then(|w| w.shown(std::time::Instant::now()));
-        if wished.is_some() {
-            ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        let now = std::time::Instant::now();
+        let (wished, locked, hint) = self
+            .hub
+            .system
+            .bluetooth_wish
+            .lock()
+            .map(|w| (w.shown(now), w.locked_for(now).is_some(), w.hint(now)))
+            .unwrap_or_default();
+        if wished.is_some() || locked {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
         }
         let powered_now = wished.or(bluetooth.powered);
         let on = powered_now.unwrap_or(false);
         row_name(ui, rect, icons::BLUETOOTH, "Bluetooth", if on { lift(mood, 0.3) } else { MUTED });
         match powered_now {
             Some(powered) => {
-                if switch(ui, rect, powered, mood, "bt-switch") && !self.hub.demo {
+                // Locked after a switch: grey, and a click only brings up the hint.
+                if switch(ui, rect, powered, if locked { MUTED } else { mood }, "bt-switch") && !self.hub.demo {
                     self.hub.system.switch_bluetooth(!powered);
-                    self.hub.play(Tone::Tap);
+                    if !locked {
+                        self.hub.play(Tone::Tap);
+                    }
                 }
             }
             None => {
                 ui.painter().text(pos2(rect.left() + ACTION_X, rect.center().y), Align2::LEFT_CENTER, t("control.noAdapter"), theme::bold(11.5), MUTED);
             }
+        }
+        if let Some(left) = hint {
+            let (row, _) = ui.allocate_exact_size(vec2(width, 18.0), Sense::hover());
+            let seconds = format!("{:.1}", left.as_secs_f32().max(0.1));
+            let text = crate::i18n::tf("port.bluetooth.tooFast", &[&seconds]);
+            text_clipped(ui, pos2(row.left() + ACTION_X, row.center().y), Align2::LEFT_CENTER, &text, theme::bold(10.5), PING_SLOW, width - ACTION_X);
         }
         if !on {
             return;
