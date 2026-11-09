@@ -45,6 +45,8 @@ pub enum Toast {
     Clipboard { preview: String, kind: clipboard::ClipKind },
     Battery { percent: f32, charging: bool },
     Bluetooth { name: String, connected: bool },
+    /// A Teams notification from Windows: sender (or chat) and text.
+    Teams { sender: String, text: String },
     TimerDone,
     ClaudeWaiting { session: String },
     ClaudeDone { session: String },
@@ -109,6 +111,7 @@ impl Hub {
         if demo {
             demo_seed(&hub);
         }
+        teams::watch_notifications(hub.toasts.clone(), hub.settings.clone(), hub.ctx.clone(), demo);
         Arc::new(hub)
     }
 

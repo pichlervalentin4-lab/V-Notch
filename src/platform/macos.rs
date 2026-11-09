@@ -649,3 +649,8 @@ mod tests {
         assert_eq!(four_cc(b"glob"), 0x676c_6f62);
     }
 }
+
+/// Other apps' notifications are not read on this platform.
+pub fn app_notifications() -> Option<Vec<AppNotification>> {
+    None
+}

@@ -153,7 +153,9 @@ impl Notch {
             MoodleStatus::Ready(_) => None,
         };
         let teams_message = match &teams {
-            TeamsStatus::SignedOut => Some(t("port.school.teamsSignedOut")),
+            // Not signed in is the normal case where the school does not approve the app; the
+            // notifications stand in, so the tab stays quiet about it.
+            TeamsStatus::Failed(error) if crate::services::teams::needs_admin(error) => Some(t("port.settings.teamsNeedsAdmin")),
             TeamsStatus::Failed(error) => Some(tf("port.school.teamsFailed", &[error])),
             _ => None,
         };

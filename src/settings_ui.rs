@@ -555,6 +555,7 @@ impl SettingsWindow {
                     hub.teams.refresh();
                     t("port.settings.teamsSaved")
                 }
+                Err(error) if teams::needs_admin(error) => t("port.settings.teamsNeedsAdmin"),
                 Err(error) => tf("port.school.teamsFailed", &[error]),
             });
         }
@@ -585,6 +586,10 @@ impl SettingsWindow {
                 }
                 if ui.button(t("port.settings.teamsOpen")).clicked() {
                     let _ = open::that_detached(uri);
+                }
+                // The waiting thread runs out on its own when the code expires.
+                if ui.button(t("port.settings.teamsCancel")).clicked() {
+                    form.teams_login = None;
                 }
             });
             hint(ui, &tf("port.settings.teamsCodeHint", &[uri]));

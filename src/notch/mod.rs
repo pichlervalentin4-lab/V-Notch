@@ -937,6 +937,9 @@ impl Notch {
         match active.toast {
             Toast::Clipboard { .. } => self.open(View::Shelf),
             Toast::Music { .. } => self.open(View::Media),
+            Toast::Teams { .. } => {
+                let _ = open::that_detached("msteams:");
+            }
             Toast::ClaudeWaiting { .. } | Toast::ClaudeDone { .. } => self.open(View::Claude),
             Toast::TimerDone => {
                 if let Ok(mut timer) = self.hub.timer.lock() {
@@ -1096,6 +1099,7 @@ impl Notch {
                 let status = t(if *connected { "bluetooth.connected" } else { "bluetooth.disconnected" });
                 row(ui, icons::BLUETOOTH, theme::ACCENT, name, &status);
             }
+            Toast::Teams { sender, text } => row(ui, icons::CHAT_TEARDROP_TEXT, Color32::from_rgb(0x7B, 0x83, 0xEB), sender, text),
             Toast::TimerDone => row(ui, icons::TIMER, theme::ORANGE, &t("port.timer.done"), &t("timer.dismiss")),
             Toast::ClaudeWaiting { session } => row(ui, icons::SPARKLE, theme::ORANGE, &t("claude.status.waiting"), session),
             Toast::ClaudeDone { session } => row(ui, icons::SPARKLE, theme::GREEN, &t("control.claude.done"), session),

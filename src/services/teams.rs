@@ -178,6 +178,12 @@ fn sign_in_error(reply: &Value) -> String {
     text.lines().next().unwrap_or(text).trim().to_string()
 }
 
+/// Whether Microsoft wants the school's admin to approve the app first: then Graph cannot be used,
+/// and the notifications stand in.
+pub fn needs_admin(error: &str) -> bool {
+    ["AADSTS90094", "AADSTS65001", "AADSTS90095", "AADSTS900941"].iter().any(|code| error.contains(code))
+}
+
 /// Swaps the refresh token for an access token and keeps the new refresh token Microsoft hands out.
 fn redeem_refresh(tenant: &str, client: &str, refresh: &str) -> Result<(String, Duration), String> {
     let reply = post_form(
@@ -378,6 +384,51 @@ pub fn parse_meetings(reply: &Value, now: DateTime<Local>) -> Vec<Meeting> {
     list
 }
 
+/// Whether a notification comes from Teams (the new app "MSTeams_…!MSTeams" or the classic one).
+pub fn is_teams(note: &platform::AppNotification) -> bool {
+    let id = note.app_id.to_lowercase();
+    id.starts_with("msteams") || id.contains("teams.teams") || note.app_name.eq_ignore_ascii_case("Microsoft Teams")
+}
+
+/// Watches Windows' notification centre and shows new Teams notifications as a pill. Works where
+/// the school does not allow apps on Graph. Notifications already there at start are not shown
+/// again, and nothing of their text is logged.
+pub fn watch_notifications(
+    toasts: crate::services::Shared<std::collections::VecDeque<crate::services::Toast>>,
+    settings: SharedSettings,
+    ctx: egui::Context,
+    demo: bool,
+) {
+    if demo {
+        return;
+    }
+    let _ = std::thread::Builder::new().name("teams-notifications".into()).spawn(move || {
+        let mut seen: Option<std::collections::HashSet<u32>> = None;
+        let mut reported = false;
+        loop {
+            std::thread::sleep(Duration::from_secs(2));
+            if !settings.read(|s| s.show_system_notifications && !s.enable_local_only_mode) {
+                continue;
+            }
+            let Some(list) = platform::app_notifications() else {
+                if !reported {
+                    crate::vlog!("TEAMS", "Windows does not let the app read notifications");
+                    reported = true;
+                }
+                continue;
+            };
+            let teams: Vec<&platform::AppNotification> = list.iter().filter(|n| is_teams(n)).collect();
+            let known = seen.get_or_insert_with(|| teams.iter().map(|n| n.id).collect());
+            for note in teams {
+                if known.insert(note.id) && !(note.title.is_empty() && note.body.is_empty()) {
+                    crate::services::push_toast(&toasts, crate::services::Toast::Teams { sender: note.title.clone(), text: note.body.clone() });
+                    ctx.request_repaint();
+                }
+            }
+        }
+    });
+}
+
 /// Graph ids are long strings; the tab wants a number that stays the same between refreshes.
 fn stable_id(id: &str) -> i64 {
     // FNV-1a, so the number does not change between runs or Rust versions.
@@ -438,6 +489,19 @@ mod tests {
         assert_eq!(list[1].subject, "Klassenrat");
         assert!(list[1].online);
         assert_eq!(list[1].url, "https://teams.example/join");
+    }
+
+    #[test]
+    fn teams_notifications_are_recognized() {
+        let note = |app_id: &str, app_name: &str| platform::AppNotification { app_id: app_id.into(), app_name: app_name.into(), ..Default::default() };
+        assert!(is_teams(&note("MSTeams_8wekyb3d8bbwe!MSTeams", "Microsoft Teams")));
+        assert!(is_teams(&note("com.squirrel.Teams.Teams", "")));
+        assert!(is_teams(&note("", "Microsoft Teams")));
+        assert!(!is_teams(&note("5319275A.WhatsAppDesktop_cv1g1gvanyjgm!App", "WhatsApp")));
+        assert!(!is_teams(&note("Discord", "Discord")));
+        assert!(needs_admin("AADSTS90094: Admin consent is required for the permissions requested by this application."));
+        assert!(needs_admin("AADSTS65001: The user or administrator has not consented"));
+        assert!(!needs_admin("AADSTS70016: authorization pending"));
     }
 
     #[test]

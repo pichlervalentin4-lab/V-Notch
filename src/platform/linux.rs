@@ -697,3 +697,8 @@ mod tests {
         assert_eq!(percent_decode("/no/escape%"), "/no/escape%");
     }
 }
+
+/// Other apps' notifications are not read on this platform.
+pub fn app_notifications() -> Option<Vec<AppNotification>> {
+    None
+}

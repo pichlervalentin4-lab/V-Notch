@@ -900,6 +900,44 @@ fn device_names(selector: windows::core::Result<HSTRING>) -> Vec<String> {
         .collect()
 }
 
+/// The toasts in the notification centre, or `None` while Windows does not let the app read them
+/// (Settings → Privacy → Notifications).
+pub fn app_notifications() -> Option<Vec<AppNotification>> {
+    use windows::UI::Notifications::Management::{UserNotificationListener, UserNotificationListenerAccessStatus};
+    use windows::UI::Notifications::{KnownNotificationBindings, NotificationKinds};
+    let listener = UserNotificationListener::Current().ok()?;
+    if listener.GetAccessStatus().ok()? != UserNotificationListenerAccessStatus::Allowed {
+        let status = listener.RequestAccessAsync().ok()?.join().ok()?;
+        if status != UserNotificationListenerAccessStatus::Allowed {
+            return None;
+        }
+    }
+    let list = listener.GetNotificationsAsync(NotificationKinds::Toast).ok()?.join().ok()?;
+    let generic = KnownNotificationBindings::ToastGeneric().ok()?;
+    let mut out = Vec::new();
+    for index in 0..list.Size().unwrap_or(0) {
+        let Ok(item) = list.GetAt(index) else { continue };
+        let app = item.AppInfo().ok();
+        let app_id = app.as_ref().and_then(|a| a.AppUserModelId().ok()).map(|s| s.to_string()).unwrap_or_default();
+        let app_name = app.and_then(|a| a.DisplayInfo().ok()).and_then(|d| d.DisplayName().ok()).map(|s| s.to_string()).unwrap_or_default();
+        let texts: Vec<String> = item
+            .Notification()
+            .and_then(|n| n.Visual())
+            .and_then(|v| v.GetBinding(&generic))
+            .and_then(|b| b.GetTextElements())
+            .map(|elements| (0..elements.Size().unwrap_or(0)).filter_map(|i| elements.GetAt(i).ok()?.Text().ok()).map(|t| t.to_string()).collect())
+            .unwrap_or_default();
+        out.push(AppNotification {
+            id: item.Id().unwrap_or_default(),
+            app_id,
+            app_name,
+            title: texts.first().cloned().unwrap_or_default(),
+            body: texts.iter().skip(1).cloned().collect::<Vec<_>>().join(" "),
+        });
+    }
+    Some(out)
+}
+
 pub fn bluetooth() -> BluetoothInfo {
     let powered = radio(RadioKind::Bluetooth).and_then(|r| r.State().ok()).map(|state| state == RadioState::On);
     let mut connected: HashSet<String> = HashSet::new();

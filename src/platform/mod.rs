@@ -120,6 +120,18 @@ pub struct BluetoothDevice {
     pub connected: bool,
 }
 
+/// A notification another app showed, as Windows lists it in the notification centre.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AppNotification {
+    pub id: u32,
+    /// The app's id (AppUserModelId) and display name.
+    pub app_id: String,
+    pub app_name: String,
+    /// The first text line (for chats: the sender) and the rest.
+    pub title: String,
+    pub body: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BluetoothInfo {
     pub powered: Option<bool>,
