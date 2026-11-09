@@ -68,6 +68,63 @@ pub struct SystemService {
     pub details_wanted: AtomicBool,
     /// Set after a radio or device was switched: network and Bluetooth are read again right away.
     pub reread_now: AtomicBool,
+    /// The Bluetooth switch: one switch at a time, and the last wish wins.
+    pub bluetooth_wish: Mutex<RadioWish>,
+}
+
+/// How long the switch shows the wished state after the radio was set, until Windows reports it.
+const SETTLE: Duration = Duration::from_secs(4);
+/// Readings without a radio that are taken for a radio in the middle of switching.
+const MAX_MISSES: u8 = 3;
+
+/// Clicks on a radio switch while it is still switching: only one switch runs, and what the user
+/// clicked last is applied after it. Keeps the wished state for the switch to show meanwhile.
+#[derive(Debug, Default)]
+pub struct RadioWish {
+    pending: Option<bool>,
+    running: bool,
+    target: Option<bool>,
+    settled_at: Option<Instant>,
+}
+
+impl RadioWish {
+    /// Records a wish. True when no switch is running, so the caller starts one.
+    pub fn want(&mut self, on: bool) -> bool {
+        self.pending = Some(on);
+        self.target = Some(on);
+        self.settled_at = None;
+        !std::mem::replace(&mut self.running, true)
+    }
+
+    /// The next state to apply; `None` ends the running switch.
+    pub fn next(&mut self, now: Instant) -> Option<bool> {
+        let next = self.pending.take();
+        if next.is_none() {
+            self.running = false;
+            self.settled_at = Some(now);
+        }
+        next
+    }
+
+    /// While switching or settling, the state the switch shows instead of the last reading.
+    pub fn shown(&self, now: Instant) -> Option<bool> {
+        self.busy(now).then_some(self.target).flatten()
+    }
+
+    pub fn busy(&self, now: Instant) -> bool {
+        self.running || self.settled_at.is_some_and(|at| now.duration_since(at) < SETTLE)
+    }
+}
+
+/// A reading without a radio right after it was there is Windows in the middle of switching: the
+/// last good reading stays for a few readings (and all the time while switching).
+fn steady_bluetooth(previous: &BluetoothInfo, read: BluetoothInfo, switching: bool, misses: &mut u8) -> BluetoothInfo {
+    if read.powered.is_none() && previous.powered.is_some() && (switching || *misses < MAX_MISSES) {
+        *misses = misses.saturating_add(1);
+        return previous.clone();
+    }
+    *misses = 0;
+    read
 }
 
 fn read_battery() -> Option<BatteryInfo> {
@@ -122,7 +179,10 @@ fn top_processes(system: &System) -> (Vec<ProcessLoad>, Vec<ProcessLoad>) {
 
 impl SystemService {
     pub fn start(ctx: egui::Context, settings: SharedSettings, toasts: Shared<VecDeque<Toast>>, demo: bool) -> Arc<Self> {
-        let service = Arc::new(Self { state: Mutex::new(SystemState::default()), details_wanted: AtomicBool::new(false), reread_now: AtomicBool::new(false) });
+        let service = Arc::new(Self { state: Mutex::new(SystemState::default()), details_wanted: AtomicBool::new(false),
+            reread_now: AtomicBool::new(false),
+            bluetooth_wish: Mutex::new(RadioWish::default()),
+        });
         if demo {
             service.demo_fill();
             return service;
@@ -142,6 +202,7 @@ impl SystemService {
         let mut last_slow = Instant::now() - Duration::from_secs(60);
         let mut last_battery: Option<BatteryInfo> = None;
         let mut last_devices: Option<Vec<String>> = None;
+        let mut bt_misses = 0_u8;
         let mut ticks = 0_u32;
         loop {
             std::thread::sleep(Duration::from_secs(1));
@@ -186,7 +247,9 @@ impl SystemService {
                 last_slow = Instant::now();
                 next.battery = read_battery();
                 next.network = platform::network();
-                next.bluetooth = platform::bluetooth();
+                let read = platform::bluetooth();
+                let switching = self.bluetooth_wish.lock().is_ok_and(|w| w.busy(Instant::now()));
+                next.bluetooth = steady_bluetooth(&next.bluetooth, read, switching, &mut bt_misses);
 
                 let notify = settings.read(|s| s.show_system_notifications);
                 if notify && let (Some(now), Some(before)) = (&next.battery, &last_battery)
@@ -220,6 +283,26 @@ impl SystemService {
                 }
             }
         }
+    }
+
+    /// Switches Bluetooth on or off. Clicks while a switch runs only change what is applied next,
+    /// so fast clicking ends in the state clicked last instead of a pile of half-done switches.
+    pub fn switch_bluetooth(self: &Arc<Self>, on: bool) {
+        let start = self.bluetooth_wish.lock().is_ok_and(|mut wish| wish.want(on));
+        if !start {
+            return;
+        }
+        let service = self.clone();
+        let _ = std::thread::Builder::new().name("bluetooth-switch".into()).spawn(move || {
+            while let Some(on) = service.bluetooth_wish.lock().ok().and_then(|mut wish| wish.next(Instant::now())) {
+                platform::set_bluetooth(on);
+            }
+            // Windows takes a moment to report the new state: read again a few times.
+            for wait in [300, 700, 1500, 2500] {
+                std::thread::sleep(Duration::from_millis(wait));
+                service.refresh_soon();
+            }
+        });
     }
 
     /// Reads network and Bluetooth again on the next tick, e.g. after a switch.
@@ -284,5 +367,40 @@ mod tests {
         assert_eq!(format_bytes(2048), "2.0 KB");
         assert_eq!(format_bytes(5 * 1024 * 1024), "5.0 MB");
         assert_eq!(format_rate(1024), "1.0 KB/s");
+    }
+
+    #[test]
+    fn fast_clicks_end_in_the_last_wish() {
+        let t0 = Instant::now();
+        let mut wish = RadioWish::default();
+        assert!(wish.want(false), "the first click starts a switch");
+        assert_eq!(wish.next(t0), Some(false));
+        // Three more clicks while the radio is still switching: none starts a second switch.
+        assert!(!wish.want(true));
+        assert!(!wish.want(false));
+        assert!(!wish.want(true));
+        assert_eq!(wish.shown(t0), Some(true));
+        assert_eq!(wish.next(t0), Some(true), "only the last wish is applied");
+        assert_eq!(wish.next(t0), None);
+        assert!(wish.busy(t0), "the switch shows the wish until Windows reports it");
+        assert_eq!(wish.shown(t0 + Duration::from_secs(1)), Some(true));
+        assert_eq!(wish.shown(t0 + SETTLE + Duration::from_millis(1)), None);
+        assert!(wish.want(false), "after it ended, a click starts a new switch");
+    }
+
+    #[test]
+    fn a_missing_radio_while_switching_is_not_unavailable() {
+        let on = BluetoothInfo { powered: Some(true), devices: Vec::new() };
+        let gone = BluetoothInfo::default();
+        let mut misses = 0;
+        assert_eq!(steady_bluetooth(&on, gone.clone(), false, &mut misses), on);
+        assert_eq!(steady_bluetooth(&on, gone.clone(), false, &mut misses), on);
+        assert_eq!(steady_bluetooth(&on, gone.clone(), false, &mut misses), on);
+        assert_eq!(steady_bluetooth(&on, gone.clone(), false, &mut misses), gone, "gone for good after three readings");
+        misses = 9;
+        assert_eq!(steady_bluetooth(&on, gone.clone(), true, &mut misses), on, "never while switching");
+        let off = BluetoothInfo { powered: Some(false), devices: Vec::new() };
+        assert_eq!(steady_bluetooth(&on, off.clone(), false, &mut misses), off);
+        assert_eq!(misses, 0);
     }
 }

@@ -416,16 +416,18 @@ impl Notch {
     fn bluetooth_rows(&mut self, ui: &mut Ui, state: &SystemState, mood: Color32, width: f32) {
         let bluetooth = &state.bluetooth;
         let (rect, _) = ui.allocate_exact_size(vec2(width, ROW_H), Sense::hover());
-        let on = bluetooth.powered.unwrap_or(false);
+        // While a switch runs the switch shows what was clicked, not the reading from before.
+        let wished = self.hub.system.bluetooth_wish.lock().ok().and_then(|w| w.shown(std::time::Instant::now()));
+        if wished.is_some() {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        }
+        let powered_now = wished.or(bluetooth.powered);
+        let on = powered_now.unwrap_or(false);
         row_name(ui, rect, icons::BLUETOOTH, "Bluetooth", if on { lift(mood, 0.3) } else { MUTED });
-        match bluetooth.powered {
+        match powered_now {
             Some(powered) => {
                 if switch(ui, rect, powered, mood, "bt-switch") && !self.hub.demo {
-                    let system = self.hub.system.clone();
-                    spawn_toggle(move || {
-                        platform::set_bluetooth(!powered);
-                        system.refresh_soon();
-                    });
+                    self.hub.system.switch_bluetooth(!powered);
                     self.hub.play(Tone::Tap);
                 }
             }

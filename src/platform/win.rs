@@ -888,7 +888,14 @@ fn set_radio(kind: RadioKind, on: bool) {
         crate::vlog!("RADIO", "access to the radios not allowed: {:?}", access.map(|a| a.0));
         return;
     }
-    let Some(radio) = radio(kind) else {
+    // Right after a switch Windows may list the radio a moment later: look again with a pause.
+    let found = (0..3).find_map(|attempt| {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(300 * attempt));
+        }
+        radio(kind)
+    });
+    let Some(radio) = found else {
         crate::vlog!("RADIO", "no {} radio", if kind == RadioKind::Bluetooth { "Bluetooth" } else { "Wi-Fi" });
         return;
     };
