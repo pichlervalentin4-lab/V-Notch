@@ -487,7 +487,7 @@ pub fn bluetooth() -> BluetoothInfo {
         for line in list.lines() {
             // "Device AA:BB:CC:DD:EE:FF Some Name"
             if let Some(name) = line.splitn(3, ' ').nth(2) {
-                devices.push(BluetoothDevice { name: name.to_string(), connected: true });
+                devices.push(BluetoothDevice { name: name.to_string(), connected: true, audio: false });
             }
         }
     }
@@ -702,3 +702,10 @@ mod tests {
 pub fn app_notifications() -> Option<Vec<AppNotification>> {
     None
 }
+
+/// Connecting Bluetooth audio devices is left to the system on this platform.
+pub fn bluetooth_audio_connect(_name: &str, _connect: bool) -> bool {
+    false
+}
+
+pub fn open_bluetooth_settings() {}

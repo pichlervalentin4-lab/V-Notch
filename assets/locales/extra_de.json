@@ -129,6 +129,8 @@
   "port.settings.teamsHint": "Braucht eine eigene App-Registrierung unter entra.microsoft.com (öffentliche Clientflows zulassen). Gelesen werden Kalender und Teams-Aufgaben; gespeichert wird nur die Anmeldung, verschlüsselt. Verlangt Microsoft eine Administratorgenehmigung, geht das nur, wenn die Schule die App freigibt – Teams-Benachrichtigungen zeigt die Notch trotzdem als Pille.",
   "port.settings.teamsNeedsAdmin": "Die Schule muss die App erst freigeben (Administratorgenehmigung). Bis dahin zeigt die Notch Teams-Benachrichtigungen aus Windows als Pille.",
   "port.settings.teamsCancel": "Abbrechen",
+  "port.bluetooth.connect": "Verbinden",
+  "port.bluetooth.disconnect": "Trennen",
   "port.settings.moodleIcal": "Kalender-Link",
   "port.settings.moodleHasIcal": "Kalender-Link gespeichert (verschlüsselt)",
   "port.settings.moodleIcalPaste": "Kalender-Link einfügen",

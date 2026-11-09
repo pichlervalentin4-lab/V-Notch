@@ -421,7 +421,11 @@ impl Notch {
         match bluetooth.powered {
             Some(powered) => {
                 if switch(ui, rect, powered, mood, "bt-switch") && !self.hub.demo {
-                    spawn_toggle(move || platform::set_bluetooth(!powered));
+                    let system = self.hub.system.clone();
+                    spawn_toggle(move || {
+                        platform::set_bluetooth(!powered);
+                        system.refresh_soon();
+                    });
                     self.hub.play(Tone::Tap);
                 }
             }
@@ -436,13 +440,51 @@ impl Notch {
             let (rect, _) = ui.allocate_exact_size(vec2(width, ROW_H), Sense::hover());
             text_clipped(ui, pos2(rect.left() + 26.0, rect.center().y), Align2::LEFT_CENTER, &t("control.noDevices"), theme::bold(11.5), MUTED, width);
         }
-        for (index, device) in bluetooth.devices.iter().enumerate() {
-            let (rect, _) = ui.allocate_exact_size(vec2(width, ROW_H), Sense::hover());
+        // Paired devices: a click connects or disconnects headphones and speakers; anything else
+        // (a phone, a watch) opens Windows' Bluetooth settings.
+        let busy_id = ui.id().with("bt-busy");
+        let busy: Option<(String, f64)> = ui.ctx().data(|d| d.get_temp(busy_id));
+        let now = ui.input(|i| i.time);
+        for device in &bluetooth.devices {
+            let (rect, response) = ui.allocate_exact_size(vec2(width, ROW_H), Sense::click());
+            let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+            if response.hovered() {
+                ui.painter().rect_filled(rect, super::kit::rounded(8.0), theme::alpha(Color32::WHITE, 0.05));
+            }
             let ink = if device.connected { Color32::WHITE } else { MUTED };
-            row_name(ui, rect, icons::HEADPHONES, &device.name, ink);
-            let status = t(if device.connected { "control.connected" } else { "control.notConnected" });
-            ui.painter().text(pos2(rect.left() + ACTION_X, rect.center().y), Align2::LEFT_CENTER, status, theme::bold(11.5), MUTED);
-            let _ = index;
+            let icon = if device.audio { icons::HEADPHONES } else { icons::BLUETOOTH };
+            row_name(ui, rect, icon, &device.name, ink);
+            // A switch takes a few seconds; until the next reading shows it, the row says so.
+            let waiting = busy.as_ref().is_some_and(|(name, since)| *name == device.name && now - since < 12.0);
+            let status = if waiting {
+                t("pi.loading")
+            } else if response.hovered() && device.audio {
+                t(if device.connected { "port.bluetooth.disconnect" } else { "port.bluetooth.connect" })
+            } else {
+                t(if device.connected { "control.connected" } else { "control.notConnected" })
+            };
+            let tint = if device.connected { lift(mood, 0.3) } else { MUTED };
+            ui.painter().text(pos2(rect.left() + ACTION_X, rect.center().y), Align2::LEFT_CENTER, status, theme::bold(11.5), tint);
+            if response.clicked() && !self.hub.demo && !waiting {
+                if device.audio {
+                    let (name, connect, system) = (device.name.clone(), !device.connected, self.hub.system.clone());
+                    ui.ctx().data_mut(|d| d.insert_temp(busy_id, (name.clone(), now)));
+                    spawn_toggle(move || {
+                        if !platform::bluetooth_audio_connect(&name, connect) {
+                            platform::open_bluetooth_settings();
+                        }
+                        // The driver needs a moment before Windows reports the new state.
+                        std::thread::sleep(std::time::Duration::from_secs(3));
+                        system.refresh_soon();
+                    });
+                } else {
+                    platform::open_bluetooth_settings();
+                }
+                self.hub.play(Tone::Tap);
+            }
+        }
+        if busy.is_some() {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
         }
     }
 }

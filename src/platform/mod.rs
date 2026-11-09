@@ -118,6 +118,8 @@ pub struct NetworkInfo {
 pub struct BluetoothDevice {
     pub name: String,
     pub connected: bool,
+    /// Headphones or a speaker that the app can connect and disconnect itself.
+    pub audio: bool,
 }
 
 /// A notification another app showed, as Windows lists it in the notification centre.

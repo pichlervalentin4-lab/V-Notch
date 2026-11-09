@@ -463,7 +463,7 @@ pub fn bluetooth() -> BluetoothInfo {
     if let Some(list) = controller.and_then(|c| c.get("device_connected")).and_then(serde_json::Value::as_array) {
         for item in list {
             if let Some(map) = item.as_object() {
-                devices.extend(map.keys().map(|name| BluetoothDevice { name: name.clone(), connected: true }));
+                devices.extend(map.keys().map(|name| BluetoothDevice { name: name.clone(), connected: true, audio: false }));
             }
         }
     }
@@ -654,3 +654,10 @@ mod tests {
 pub fn app_notifications() -> Option<Vec<AppNotification>> {
     None
 }
+
+/// Connecting Bluetooth audio devices is left to the system on this platform.
+pub fn bluetooth_audio_connect(_name: &str, _connect: bool) -> bool {
+    false
+}
+
+pub fn open_bluetooth_settings() {}

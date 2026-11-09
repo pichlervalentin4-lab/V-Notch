@@ -879,25 +879,24 @@ pub fn set_bluetooth(on: bool) {
     set_radio(RadioKind::Bluetooth, on);
 }
 
+/// Switches a radio and waits for it. Windows only lets an app do this after asking once, so the
+/// access is requested first; a refusal goes to the log.
 fn set_radio(kind: RadioKind, on: bool) {
-    if let Some(radio) = radio(kind)
-        && let Ok(operation) = radio.SetStateAsync(if on { RadioState::On } else { RadioState::Off })
-    {
-        let _ = operation.join();
+    use windows::Devices::Radios::RadioAccessStatus;
+    let access = Radio::RequestAccessAsync().and_then(|op| op.join());
+    if access.as_ref().is_ok_and(|a| *a != RadioAccessStatus::Allowed) {
+        crate::vlog!("RADIO", "access to the radios not allowed: {:?}", access.map(|a| a.0));
+        return;
     }
-}
-
-fn device_names(selector: windows::core::Result<HSTRING>) -> Vec<String> {
-    let Ok(selector) = selector else { return Vec::new() };
-    let Ok(found) = DeviceInformation::FindAllAsyncAqsFilter(&selector).and_then(|op| op.join()) else {
-        return Vec::new();
+    let Some(radio) = radio(kind) else {
+        crate::vlog!("RADIO", "no {} radio", if kind == RadioKind::Bluetooth { "Bluetooth" } else { "Wi-Fi" });
+        return;
     };
-    let size = found.Size().unwrap_or(0);
-    (0..size)
-        .filter_map(|i| found.GetAt(i).ok())
-        .filter_map(|device| device.Name().ok().map(|name| name.to_string()))
-        .filter(|name| !name.is_empty())
-        .collect()
+    match radio.SetStateAsync(if on { RadioState::On } else { RadioState::Off }).and_then(|op| op.join()) {
+        Ok(status) if status == RadioAccessStatus::Allowed => {}
+        Ok(status) => crate::vlog!("RADIO", "switching refused: {}", status.0),
+        Err(error) => crate::vlog!("RADIO", "switching failed: {error}"),
+    }
 }
 
 /// The toasts in the notification centre, or `None` while Windows does not let the app read them
@@ -938,21 +937,118 @@ pub fn app_notifications() -> Option<Vec<AppNotification>> {
     Some(out)
 }
 
+/// Paired devices with whether each is connected now. The connection selectors match nothing for
+/// plain `FindAllAsync`, so every paired device is opened and asked itself.
+fn paired_devices() -> Vec<(String, bool)> {
+    let mut out: Vec<(String, bool)> = Vec::new();
+    let mut add = |name: String, connected: bool| match out.iter_mut().find(|(n, _)| *n == name) {
+        Some(entry) => entry.1 |= connected,
+        None => out.push((name, connected)),
+    };
+    let find = |selector: windows::core::Result<HSTRING>| {
+        selector
+            .and_then(|s| DeviceInformation::FindAllAsyncAqsFilter(&s))
+            .and_then(|op| op.join())
+            .map(|list| (0..list.Size().unwrap_or(0)).filter_map(|i| list.GetAt(i).ok()).collect::<Vec<_>>())
+            .unwrap_or_default()
+    };
+    for info in find(WinBluetoothDevice::GetDeviceSelectorFromPairingState(true)) {
+        let (Ok(id), Ok(name)) = (info.Id(), info.Name()) else { continue };
+        let connected = WinBluetoothDevice::FromIdAsync(&id)
+            .and_then(|op| op.join())
+            .and_then(|d| d.ConnectionStatus())
+            .is_ok_and(|s| s == BluetoothConnectionStatus::Connected);
+        add(name.to_string(), connected);
+    }
+    for info in find(BluetoothLEDevice::GetDeviceSelectorFromPairingState(true)) {
+        let (Ok(id), Ok(name)) = (info.Id(), info.Name()) else { continue };
+        let connected = BluetoothLEDevice::FromIdAsync(&id)
+            .and_then(|op| op.join())
+            .and_then(|d| d.ConnectionStatus())
+            .is_ok_and(|s| s == BluetoothConnectionStatus::Connected);
+        add(name.to_string(), connected);
+    }
+    out.retain(|(name, _)| !name.trim().is_empty());
+    out
+}
+
 pub fn bluetooth() -> BluetoothInfo {
     let powered = radio(RadioKind::Bluetooth).and_then(|r| r.State().ok()).map(|state| state == RadioState::On);
-    let mut connected: HashSet<String> = HashSet::new();
+    let mut devices: Vec<BluetoothDevice> = Vec::new();
     if powered == Some(true) {
-        connected.extend(device_names(WinBluetoothDevice::GetDeviceSelectorFromConnectionStatus(
-            BluetoothConnectionStatus::Connected,
-        )));
-        connected.extend(device_names(BluetoothLEDevice::GetDeviceSelectorFromConnectionStatus(
-            BluetoothConnectionStatus::Connected,
-        )));
+        let audio = bluetooth_audio_endpoints();
+        devices = paired_devices()
+            .into_iter()
+            .map(|(name, connected)| {
+                let audio = audio.iter().any(|(endpoint, _)| endpoint.contains(&name));
+                BluetoothDevice { name, connected, audio }
+            })
+            .collect();
     }
-    let mut devices: Vec<BluetoothDevice> =
-        connected.into_iter().map(|name| BluetoothDevice { name, connected: true }).collect();
-    devices.sort_by(|a, b| a.name.cmp(&b.name));
+    // Connected ones first, then by name.
+    devices.sort_by(|a, b| b.connected.cmp(&a.connected).then_with(|| a.name.cmp(&b.name)));
     BluetoothInfo { powered, devices }
+}
+
+/// KSPROPSETID_BtAudio: Bluetooth audio drivers connect and disconnect on these one-shot properties.
+const KSPROPSETID_BT_AUDIO: windows::core::GUID = windows::core::GUID::from_u128(0x7fa06c40_b8f6_4c7e_8556_e8c33a12e54d);
+const KSPROPERTY_ONESHOT_RECONNECT: u32 = 0;
+const KSPROPERTY_ONESHOT_DISCONNECT: u32 = 1;
+
+/// Every Bluetooth audio output with its driver's control, whether connected or not.
+fn bluetooth_audio_endpoints() -> Vec<(String, windows::Win32::Media::KernelStreaming::IKsControl)> {
+    use windows::Win32::Media::KernelStreaming::IKsControl;
+    let mut out = Vec::new();
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let Ok(enumerator) = CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL) else { return out };
+        let Ok(devices) = enumerator.EnumAudioEndpoints(eRender, DEVICE_STATE(DEVICE_STATE_ACTIVE.0 | DEVICE_STATE_UNPLUGGED.0)) else { return out };
+        for index in 0..devices.GetCount().unwrap_or(0) {
+            let Ok(device) = devices.Item(index) else { continue };
+            let name = device.OpenPropertyStore(STGM_READ).and_then(|store| store.GetValue(&PKEY_Device_FriendlyName)).map(|v| v.to_string()).unwrap_or_default();
+            let control = (|| -> windows::core::Result<IKsControl> {
+                let topology: IDeviceTopology = device.Activate(CLSCTX_ALL, None)?;
+                let connector = topology.GetConnector(0)?;
+                let part: IPart = connector.GetConnectedTo()?.cast()?;
+                let mut control: Option<IKsControl> = None;
+                part.Activate(CLSCTX_INPROC_SERVER.0, &IKsControl::IID, Some(&mut control as *mut _ as *mut *mut c_void))?;
+                control.ok_or_else(windows::core::Error::empty)
+            })();
+            // Only Bluetooth drivers know the property set; ask it once so other outputs drop out.
+            if let Ok(control) = control
+                && ks_bt_audio(&control, u32::MAX).is_some()
+            {
+                out.push((name, control));
+            }
+        }
+    }
+    out
+}
+
+/// Sends one of the BtAudio one-shot properties; with `u32::MAX` only checks that the set exists.
+fn ks_bt_audio(control: &windows::Win32::Media::KernelStreaming::IKsControl, id: u32) -> Option<()> {
+    use windows::Win32::Media::KernelStreaming::{KSIDENTIFIER, KSIDENTIFIER_0, KSIDENTIFIER_0_0, KSPROPERTY_TYPE_GET, KSPROPERTY_TYPE_SETSUPPORT};
+    let (id, flags) = if id == u32::MAX { (KSPROPERTY_ONESHOT_RECONNECT, KSPROPERTY_TYPE_SETSUPPORT) } else { (id, KSPROPERTY_TYPE_GET) };
+    let property = KSIDENTIFIER { Anonymous: KSIDENTIFIER_0 { Anonymous: KSIDENTIFIER_0_0 { Set: KSPROPSETID_BT_AUDIO, Id: id, Flags: flags } } };
+    let mut returned = 0u32;
+    unsafe { control.KsProperty(&property, std::mem::size_of::<KSIDENTIFIER>() as u32, std::ptr::null_mut(), 0, &mut returned).ok() }
+}
+
+/// Connects (or disconnects) the Bluetooth headphones or speaker of that name. False when the
+/// device has no audio driver that takes the command; the caller then opens the settings.
+pub fn bluetooth_audio_connect(name: &str, connect: bool) -> bool {
+    let id = if connect { KSPROPERTY_ONESHOT_RECONNECT } else { KSPROPERTY_ONESHOT_DISCONNECT };
+    let mut done = false;
+    for (endpoint, control) in bluetooth_audio_endpoints() {
+        if endpoint.contains(name) && ks_bt_audio(&control, id).is_some() {
+            done = true;
+        }
+    }
+    done
+}
+
+pub fn open_bluetooth_settings() {
+    let _ = open::that_detached("ms-settings:bluetooth");
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1350,3 +1446,4 @@ mod tests {
         assert_eq!(dpapi(&encrypted, false).unwrap(), secret);
     }
 }
+

@@ -66,6 +66,8 @@ pub struct SystemService {
     pub state: Mutex<SystemState>,
     /// Set while the controls tab is open: then the expensive numbers are worth collecting.
     pub details_wanted: AtomicBool,
+    /// Set after a radio or device was switched: network and Bluetooth are read again right away.
+    pub reread_now: AtomicBool,
 }
 
 fn read_battery() -> Option<BatteryInfo> {
@@ -120,7 +122,7 @@ fn top_processes(system: &System) -> (Vec<ProcessLoad>, Vec<ProcessLoad>) {
 
 impl SystemService {
     pub fn start(ctx: egui::Context, settings: SharedSettings, toasts: Shared<VecDeque<Toast>>, demo: bool) -> Arc<Self> {
-        let service = Arc::new(Self { state: Mutex::new(SystemState::default()), details_wanted: AtomicBool::new(false) });
+        let service = Arc::new(Self { state: Mutex::new(SystemState::default()), details_wanted: AtomicBool::new(false), reread_now: AtomicBool::new(false) });
         if demo {
             service.demo_fill();
             return service;
@@ -180,7 +182,7 @@ impl SystemService {
             last_tick = Instant::now();
 
             let slow_every = if details { 5 } else { 30 };
-            if last_slow.elapsed() > Duration::from_secs(slow_every) {
+            if last_slow.elapsed() > Duration::from_secs(slow_every) || self.reread_now.swap(false, Ordering::Relaxed) {
                 last_slow = Instant::now();
                 next.battery = read_battery();
                 next.network = platform::network();
@@ -220,8 +222,9 @@ impl SystemService {
         }
     }
 
+    /// Reads network and Bluetooth again on the next tick, e.g. after a switch.
     pub fn refresh_soon(&self) {
-        let _ = self;
+        self.reread_now.store(true, Ordering::Relaxed);
     }
 
     fn demo_fill(&self) {
@@ -241,7 +244,10 @@ impl SystemService {
                 network: NetworkInfo { kind: NetworkKind::Wifi, name: "Heimnetz".into(), wifi_on: Some(true) },
                 bluetooth: BluetoothInfo {
                     powered: Some(true),
-                    devices: vec![BluetoothDevice { name: "Kopfhörer".into(), connected: true }],
+                    devices: vec![
+                        BluetoothDevice { name: "Kopfhörer".into(), connected: true, audio: true },
+                        BluetoothDevice { name: "iPhone".into(), connected: false, audio: false },
+                    ],
                 },
                 privacy: PrivacyInfo { mic: vec!["Discord".into()], camera: Vec::new(), camera_detectable: true },
                 fullscreen: FullscreenKind::None,
